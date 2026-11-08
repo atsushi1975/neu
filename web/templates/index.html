@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>犯人は踊る | オンライン</title>
+  <title>ノイ | オンライン</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/favicon.ico" sizes="any">
@@ -15,8 +15,8 @@
 <body class="home">
   <main class="home-card">
     <a id="back-to-lobby" class="home-back" href="/">← 共通ロビーに戻る</a>
-    <h1>犯人は踊る</h1>
-    <p class="tagline">3〜8人で遊ぶ、推理カードゲーム。</p>
+    <h1>ノイ</h1>
+    <p class="tagline">場の合計が <strong>101</strong> を超えないようにカードを出す、2〜7人用カードゲーム。</p>
 
     <section>
       <h2>ルームを作る</h2>
@@ -50,7 +50,6 @@
     const errorEl = document.getElementById("error");
 
     // 共通ロビー（game-lobby）は同じホストのルート（既定ポート80）で動いている。
-    // 既存の GET / をそのまま使い、このアプリ側に新しい経路は足さない。
     const lobbyLink = document.getElementById("back-to-lobby");
     if (lobbyLink) {
       lobbyLink.href = `${location.protocol}//${location.hostname}/`;
@@ -106,7 +105,7 @@
     }
 
     function remember(roomId, session) {
-      localStorage.setItem(`hannin:${roomId}`, JSON.stringify(session));
+      localStorage.setItem(`neu:${roomId}`, JSON.stringify(session));
       location.href = `/rooms/${roomId}`;
     }
 

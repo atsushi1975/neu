@@ -2,8 +2,9 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>犯人は踊る | ルーム</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>ノイ | ルーム</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/favicon.ico" sizes="any">
@@ -14,9 +15,9 @@
 </head>
 <body class="room" data-room-id="{{ room_id }}">
   <header class="topbar">
-    <a href="/" class="brand">犯人は踊る</a>
+    <a href="/" class="brand">ノイ</a>
     <div class="room-id">
-      ルーム <code id="room-id-label">{{ room_id }}</code>
+      <span class="room-id-text">ルーム <code id="room-id-label">{{ room_id }}</code></span>
       <button id="copy-room" type="button" class="ghost small">コピー</button>
       <button id="leave-room" type="button" class="ghost small">退出</button>
     </div>
@@ -26,6 +27,7 @@
 
   <main id="join-panel" class="panel" hidden>
     <h2>このルームに参加</h2>
+    <p class="muted">名前を入れて参加してください。</p>
     <form id="join-form" class="stack">
       <label>名前
         <input id="join-name" maxlength="16" required autocomplete="nickname">
@@ -43,57 +45,71 @@
     <p id="lobby-status" class="lobby-status" role="status" aria-live="polite"></p>
     <div class="lobby-actions">
       <div id="start-wrap" class="start-wrap" hidden>
-        <button id="start-button" type="button" class="primary" aria-haspopup="menu" aria-expanded="false">ゲーム開始 ▾</button>
-        <ul id="start-menu" class="start-menu" role="menu" hidden></ul>
+        <button id="start-button" type="button" class="primary">ゲームを開始</button>
       </div>
       <button id="take-host" type="button" class="ghost small" hidden>ホストを引き継ぐ</button>
     </div>
   </main>
 
   <main id="game-panel" hidden>
-    <section class="players" id="players"></section>
-
-    <section class="table">
-      <div class="piles">
-        <div>
-          <h3>場に出たカード</h3>
-          <div id="played" class="played"></div>
-        </div>
-        <div>
-          <h3>自分のメモ <span class="muted small">（あなただけに表示）</span></h3>
-          <ul id="notes" class="notes"></ul>
-        </div>
+    <section class="summary" aria-label="場の状況">
+      <div class="summary-top">
+        <span id="summary-round" class="summary-chip">ラウンド 1</span>
+        <span id="summary-direction" class="summary-chip">↻ 時計回り</span>
+        <span id="summary-remaining" class="summary-chip">1枚</span>
       </div>
+      <p class="summary-label">場の合計</p>
+      <p id="summary-sum" class="summary-sum">0</p>
+      <p id="summary-note" class="summary-note"></p>
+    </section>
 
-      <div id="prompt" class="prompt" role="status" aria-live="polite"></div>
+    <section id="players" class="players" aria-label="プレイヤー"></section>
 
-      <div class="hand-wrap">
-        <h3>自分の手札 <span id="hand-count" class="muted"></span></h3>
-        <div id="hand" class="hand"></div>
+    <section class="field" aria-label="場札と捨て札">
+      <div class="pile">
+        <h3>場札</h3>
+        <div id="field-card" class="pile-card"></div>
       </div>
-
-      <div id="action-panel" class="action-panel" hidden>
-        <div id="action-body"></div>
-        <div class="action-buttons">
-          <button id="confirm-play" type="button" class="primary">出す</button>
-          <button id="cancel-play" type="button" class="ghost">キャンセル</button>
-        </div>
+      <div class="pile">
+        <h3>最後の捨て札</h3>
+        <div id="discard-card" class="pile-card"></div>
       </div>
+      <p id="deck-count" class="deck-count"></p>
+    </section>
 
-      <div class="log-wrap">
-        <h3>ログ</h3>
-        <ol id="log" class="log"></ol>
+    <div id="prompt" class="prompt" role="status" aria-live="polite"></div>
+
+    <section class="hand-wrap">
+      <h3>自分の手札 <span id="hand-count" class="muted"></span></h3>
+      <div id="hand" class="hand"></div>
+      <p class="hand-help">カードをタップして選び、もう一度「出す」で確定します。</p>
+    </section>
+
+    <div id="action-panel" class="action-panel" hidden>
+      <div id="action-body"></div>
+      <div class="action-buttons">
+        <button id="confirm-play" type="button" class="primary">出す</button>
+        <button id="cancel-play" type="button" class="ghost">キャンセル</button>
       </div>
+    </div>
+
+    <section class="log-wrap">
+      <h3>ログ</h3>
+      <ol id="log" class="log"></ol>
     </section>
   </main>
 
+  <div id="last-round-toast" class="toast" role="status" aria-live="assertive" hidden>
+    <p id="toast-title" class="toast-title"></p>
+    <p id="toast-body" class="toast-body"></p>
+  </div>
+
   <div id="result-overlay" class="overlay" hidden>
     <div class="result-card">
-      <h2>ゲーム終了</h2>
-      <p id="result-message"></p>
-      <p id="result-winners" class="result-line"></p>
-      <p id="result-losers" class="result-line"></p>
-      <ul id="result-cpus" class="result-cpus" hidden></ul>
+      <p class="result-eyebrow">ゲーム終了</p>
+      <h2 id="result-winner">勝者</h2>
+      <p id="result-message" class="result-message"></p>
+      <ol id="result-standings" class="result-standings"></ol>
       <a href="/" class="button primary">新しいルームを作る</a>
     </div>
   </div>
