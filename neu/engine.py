@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import random
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # 定数（仮置きの決め事はここに集約する）

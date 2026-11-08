@@ -6,10 +6,10 @@ import unittest
 from neu.engine import (
     InvalidSetup,
     apply,
+    from_dict,
     legal_actions,
     new_game,
     to_dict,
-    from_dict,
     view_for,
 )
 

@@ -4,7 +4,7 @@ import unittest
 
 from neu.engine import Action, apply, is_game_over
 
-from tests.helpers import card, cards, filler, make_state
+from tests.helpers import cards, make_state
 
 
 class NumberCardTest(unittest.TestCase):
