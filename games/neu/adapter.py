@@ -17,7 +17,6 @@ from neu.engine import (
     Action,
     Card,
     GameState,
-    LOSING_LIMIT,
     NeuError,
     apply,
     new_game,
@@ -231,17 +230,33 @@ class NeuGame:
             )
             return
 
-        if "101超え" in raw:
-            play_match = re.search(r"が (\w+) を出して合計 (-?\d+)", raw)
+        if "ラウンド負け" in raw:
+            # ラウンド負け（バースト・安全なカード無し）は構造化された round_results から作る。
+            result = (
+                self.state.round_results[-1]
+                if self.state is not None and self.state.round_results
+                else {}
+            )
+            reason = str(result.get("reason") or "bust")
+            loser_seat = int(result.get("loser") or (start.group(1) if start else 0))
+            loser_id = self.player_id_at(loser_seat)
+            loser_name = self.name_at(loser_seat)
+            card_id = str(result.get("card_id")) if reason == "bust" and result.get("card_id") else None
+            sum_after = (
+                int(result.get("sum_after"))
+                if reason == "bust" and result.get("sum_after") is not None
+                else None
+            )
             self._add_event(
                 "round_end",
                 message,
-                playerId=player_id,
-                playerName=player_name,
-                loserId=player_id,
-                loserName=player_name,
-                cardId=play_match.group(1) if play_match else None,
-                sumAfter=int(play_match.group(2)) if play_match else None,
+                playerId=loser_id,
+                playerName=loser_name,
+                loserId=loser_id,
+                loserName=loser_name,
+                cardId=card_id,
+                sumAfter=sum_after,
+                reason=reason,
             )
             return
 
@@ -325,35 +340,53 @@ class NeuGame:
     def _detect_round_end(
         self, before: GameState, after: GameState, card: Card
     ) -> dict[str, Any] | None:
-        if not card.is_number:
+        # ラウンド結果が1件以上増えていれば、その操作でラウンド負けが起きたということ。
+        if len(after.round_results) <= len(before.round_results):
             return None
-        game_over = before.phase == "playing" and after.phase == "game_over"
-        new_round = after.round_number != before.round_number
-        if not (game_over or new_round):
-            return None
-
-        loser_seat = before.current_player
-        if loser_seat is None:
-            return None
-        sum_after = (
-            LOSING_LIMIT if card.kind == "hundred" else before.total + card.value
-        )
-        if sum_after <= LOSING_LIMIT:
-            return None
-
+        result = after.round_results[-1]
+        reason = str(result.get("reason") or "bust")
+        loser_seat = int(result.get("loser") or 0)
         loser_after = after.players[loser_seat]
         winner_seat = after.winner
+        game_over = bool(result.get("game_over"))
+        card_id = str(result.get("card_id")) if reason == "bust" and result.get("card_id") else None
+        sum_after = (
+            int(result.get("sum_after"))
+            if reason == "bust" and result.get("sum_after") is not None
+            else None
+        )
+        round_number = int(result.get("round") or after.round_number)
+        loser_id = self.player_id_at(loser_seat)
+        loser_name = self.name_at(loser_seat)
+        message = (
+            f"{loser_name} さんが {card_id} でバースト（合計 {sum_after}）"
+            if reason == "bust"
+            else f"{loser_name} さんは出せるカードがすべて101を超えるため負け"
+        )
+        revealed_hand: list[dict[str, Any]] | None = None
+        if reason == "no_safe_card":
+            revealed_hand = [
+                card_to_view(
+                    Card(
+                        id=str(entry["id"]),
+                        kind=str(entry.get("kind") or "number"),
+                        value=int(entry.get("value") or 0),
+                        copy=int(entry.get("copy") or 1),
+                    )
+                )
+                for entry in (result.get("hand") or [])
+            ]
         return {
-            "round": before.round_number,
-            "loserId": self.player_id_at(loser_seat),
-            "loserName": self.name_at(loser_seat),
-            "cardId": card.id,
-            "card": card_to_view(card),
+            "round": round_number,
+            "loserId": loser_id,
+            "loserName": loser_name,
+            "cardId": card_id,
+            "card": card_to_view(card) if reason == "bust" else None,
             "sumAfter": sum_after,
             "sum": sum_after,
-            "chipsLeft": loser_after.chips,
-            "chips": loser_after.chips,
-            "eliminated": not loser_after.alive,
+            "chipsLeft": int(result.get("chips_left") or loser_after.chips),
+            "chips": int(result.get("chips_left") or loser_after.chips),
+            "eliminated": bool(result.get("eliminated")),
             "alive": loser_after.alive,
             "gameOver": game_over,
             "winnerId": (
@@ -363,10 +396,9 @@ class NeuGame:
                 self.name_at(winner_seat) if winner_seat is not None else None
             ),
             "nextRound": None if game_over else after.round_number,
-            "message": (
-                f"{self.name_at(loser_seat)} さんが {card.id} でバースト"
-                f"（合計 {sum_after}）"
-            ),
+            "message": message,
+            "reason": reason,
+            "revealedHand": revealed_hand,
         }
 
 

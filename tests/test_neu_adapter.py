@@ -278,12 +278,57 @@ class RoundEndTest(unittest.TestCase):
         self.assertEqual(last["loserName"], "Alice")
         self.assertEqual(last["cardId"], "n5")
         self.assertEqual(last["sumAfter"], 105)
+        self.assertEqual(last["sum"], 105)
         self.assertEqual(last["chips"], 2)
         self.assertFalse(last["eliminated"])
         self.assertFalse(last["gameOver"])
+        self.assertEqual(last["reason"], "bust")
+        self.assertIsNone(last["revealedHand"])
         # 次のラウンドが始まっているが、lastRound は残る。
         self.assertEqual(game.state.round_number, 2)
         self.assertEqual(game.view("p1")["lastRound"]["cardId"], "n5")
+
+    def test_no_safe_card_keeps_last_round_result(self):
+        game = make_game(
+            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10")],
+            total=100,
+            current=0,
+            chips=[3, 3, 3],
+        )
+        game.act("p0", {"type": "play", "cardId": "pass#1"})
+        last = game.last_round
+        self.assertIsNotNone(last)
+        self.assertEqual(last["round"], 1)
+        self.assertEqual(last["loserId"], "p1")
+        self.assertEqual(last["loserName"], "Bob")
+        self.assertIsNone(last["cardId"])
+        self.assertIsNone(last["sumAfter"])
+        self.assertEqual(last["chips"], 2)
+        self.assertFalse(last["eliminated"])
+        self.assertFalse(last["gameOver"])
+        self.assertEqual(last["reason"], "no_safe_card")
+        # no_safe_card ではカードを出していないが、負けた人の手札が見える。
+        self.assertEqual(len(last["revealedHand"]), 3)
+        self.assertEqual(game.state.round_results[-1]["hand"][0]["id"], "n50")
+
+    def test_no_safe_card_revealed_hand_is_the_losers_hand(self):
+        game = make_game(
+            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10")],
+            total=100,
+            current=0,
+            chips=[3, 3, 3],
+        )
+        game.act("p0", {"type": "play", "cardId": "pass#1"})
+        last = game.last_round
+        self.assertEqual(last["reason"], "no_safe_card")
+        revealed = last["revealedHand"]
+        self.assertEqual(len(revealed), 3)
+        self.assertEqual(revealed[0]["id"], "n50")
+        self.assertEqual(revealed[0]["cardId"], "n50#1")
+        self.assertEqual(revealed[0]["kind"], "number")
+        self.assertEqual(revealed[0]["value"], 50)
+        self.assertEqual(revealed[1]["id"], "n50")
+        self.assertEqual(revealed[2]["id"], "n10")
 
     def test_game_over_phase_and_winner(self):
         game = make_game(
@@ -301,10 +346,35 @@ class RoundEndTest(unittest.TestCase):
         self.assertTrue(last["eliminated"])
         self.assertEqual(last["chips"], 0)
         self.assertEqual(last["winnerId"], "p1")
+        self.assertEqual(last["reason"], "bust")
         view = game.view("p0")
         self.assertEqual(view["phase"], "finished")
         self.assertEqual(view["winnerId"], "p1")
         self.assertEqual(view["result"]["winnerName"], "Bob")
+
+    def test_start_uses_random_dealer_and_first_player_is_dealer(self):
+        game = NeuGame(PLAYERS, seed=1)
+        game.start()
+        self.assertEqual(game.state.dealer, game.state.current_player)
+        view = game.view("p0")
+        self.assertEqual(view["dealer"], view["currentPlayer"])
+        self.assertEqual(view["dealerId"], view["currentPlayerId"])
+
+    def test_no_safe_card_event_is_logged_with_reason(self):
+        game = make_game(
+            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10")],
+            total=100,
+            current=0,
+            chips=[3, 3, 3],
+        )
+        game.act("p0", {"type": "play", "cardId": "pass#1"})
+        events = game.recent_events()
+        round_ends = [event for event in events if event.get("kind") == "round_end"]
+        self.assertTrue(round_ends)
+        self.assertEqual(round_ends[-1]["reason"], "no_safe_card")
+        self.assertEqual(round_ends[-1]["loserName"], "Bob")
+        self.assertIsNone(round_ends[-1].get("cardId"))
+        self.assertIsNone(round_ends[-1].get("sumAfter"))
 
 
 class RandomPlayTest(unittest.TestCase):
