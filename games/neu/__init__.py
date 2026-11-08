@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from gameplatform.errors import ConfigurationError, InvalidAction
+from gameplatform.errors import ConfigurationError
 from gameplatform.games import GameDefinition, register
-from neu.engine import view_for
 
 from .adapter import NeuGame
 
@@ -31,21 +30,11 @@ def create_game(players: list[tuple[str, str]], config: dict[str, Any]) -> NeuGa
 
 
 def player_view(game: NeuGame, player_id: str) -> dict[str, Any]:
-    if game.state is None:
-        raise InvalidAction("ゲームがまだ開始していません。")
-    try:
-        seat = next(
-            index
-            for index, (candidate_id, _name) in enumerate(game.players)
-            if candidate_id == player_id
-        )
-    except StopIteration:
-        raise InvalidAction("このゲームのプレイヤーではありません。") from None
-    return view_for(game.state, seat)
+    return game.view(player_id)
 
 
 def act(game: NeuGame, player_id: str, payload: dict[str, Any]) -> None:
-    raise InvalidAction("ゲーム操作はまだ実装されていません。")
+    game.act(player_id, payload)
 
 
 GAME = GameDefinition(
