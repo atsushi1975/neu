@@ -3,46 +3,78 @@
 場の数字の合計が **101 を超えないように** カードを出し合うカードゲーム
 「ノイ (Neu)」のオンライン対戦実装です。
 
-このリポジトリはフェーズ1として、**ゲームエンジン + テスト + 動作確認用 CLI** のみを
-提供します。外部依存はなく、Python 3 の標準ライブラリだけで動きます。
+フェーズ2まで完了しており、**Flask + 素の JavaScript** で
+部屋作成 → 参加 → 開始 → 対戦 → 結果表示まで遊べます。
+ルール判定は `neu/engine.py` に閉じており、UI / API 側では再実装していません。
 
 ## 必要なもの
 
-- Python 3.10 以上（標準ライブラリのみ。pip install は不要）
+- Python 3.10 以上
+- Flask（`requirements.txt`）
 
-## 遊んでみる（CLI）
+## 起動
 
 ```bash
-python -m neu.cli --players 4 --seed 1
+python3 -m pip install -r requirements.txt
+python3 app.py --port 5000
 ```
 
-- 座席 0 が人間、それ以外は合法手からランダムに選ぶ簡易 Bot です。
-- `--players` は 2〜7、`--seed` を固定すると山札の並びが再現されます。
-- カード番号を入力して出します。SHOT のときは `番号 対象席` のように入力します。
+ブラウザで `http://localhost:5000/` を開きます。スマホ縦画面を優先した UI です。
+
+1. 名前を入れてルームを作成
+2. 表示されたルーム ID を仲間に共有（または同じ画面のルーム一覧から参加）
+3. 2〜7 人がそろったら、ホストが「ゲームを開始」
+4. カードをタップして選び、「出す」で確定（2タップ操作）
+5. 101 を超えるとラウンド負け。チップが尽きると脱落し、最後の1人が勝者
+
+## 主な機能
+
+- 部屋作成・参加・退出・ホスト引き継ぎ
+- SSE によるリアルタイム更新
+- 自分の手札だけを公開（他人の手札は枚数のみ）
+- 合計が 101 を超えるカードの警告、DOUBLE 中の1枚目無効表示
+- SHOT の指名先選択
+- 手番通知（プロンプト・ページタイトル・対応端末では振動）
+- ラウンド敗者のトースト演出、ゲーム終了時の順位表示
+- カード画像が無い場合の CSS 仮カード表示
 
 ## テスト
 
 ```bash
-python -m unittest discover
+python3 -m unittest discover
 ```
+
+現在 105 テスト（エンジン・アダプタ・API 結合）が通ります。
 
 ## ディレクトリ構成
 
 ```
-neu/
-  engine.py    ゲームエンジン（純粋ロジック。print・入力・グローバル乱数なし）
-  cli.py       動作確認用 CLI
-tests/         unittest によるテスト
-static/img/cards/   将来カード画像を置く場所（今は空）
-init.md       開発メモ（ルール・設計・進捗の引き継ぎ用）
+neu/                  ゲームエンジン（純粋ロジック）
+  engine.py
+  cli.py              動作確認用 CLI
+gameplatform/         ゲーム非依存の共通基盤（ルーム・SSE・認証）
+games/neu/            ノイを共通基盤に載せるアダプタ
+web/                  Flask アプリと API
+  templates/          index.html, room.html
+static/               room.js, style.css, img/cards/（カード画像18枚）
+tests/                unittest
+app.py                開発サーバー
+init.md               ルール・設計・進捗の引き継ぎメモ
 ```
 
-## フェーズ計画
+## CLI（オフライン動作確認）
 
-1. ゲームエンジン + テスト + CLI（このリポジトリの現在地）
-2. Flask + スマホ向け Web UI
-3. `/health`・Docker・共通ロビー登録・VPS 展開
-4. CPU プレイヤーの強化
+```bash
+python3 -m neu.cli --players 4 --seed 1
+```
+
+座席0が人間、それ以外は合法手からランダムに選ぶ簡易 Bot です。
+
+## 未対応
+
+- Docker 化・共通ロビー登録・VPS 展開（フェーズ3）
+- CPU 対戦（現在 `cpu_driver=None`。`cpuCount > 0` の開始は API が拒否）
+- `back.png` / `chip.png` は未提供（裏面・チップは CSS で代替）
 
 詳細なルール・設計・進捗は [init.md](init.md) を参照してください。
 

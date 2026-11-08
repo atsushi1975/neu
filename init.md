@@ -17,16 +17,17 @@
 | フェーズ | 内容 | 状態 |
 | --- | --- | --- |
 | 1 | ゲームエンジン + テスト + CLI（標準ライブラリのみ） | 完了 |
-| 2 | Flask + スマホ向け Web UI（素の JS） | 未着手 |
-| 3 | `/health`・Docker 化・共通ロビー (game-lobby) 登録・VPS 展開 | 未着手 |
+| 2 | Flask + スマホ向け Web UI（素の JS、複数人オンライン対戦） | 完了 |
+| 3 | Docker 化・共通ロビー (game-lobby) 登録・VPS 展開 | 未着手 |
 | 4 | CPU プレイヤーの強化 | 未着手 |
 
 ### 技術方針
 
-- Python 3（標準ライブラリのみ、外部依存なし）
-- フェーズ1では Flask・HTML・Docker・画像・CPU 強化には手を出さない
+- Python 3（エンジンは標準ライブラリのみ）
+- フェーズ2で Flask を追加（`requirements.txt`）。フロントは素の HTML / CSS / JavaScript。
 - ルール判定は画面や通信から切り離した**純粋なエンジン**にし、テストで固める
   （過去の別ゲームで修正がデグレした反省から）
+- Web / API 層はルールを再実装せず、`legal_actions` と `apply` の結果だけを表示する
 - エンジン内では `print`・`input`・乱数のグローバル利用を禁止。
   乱数は状態が持つ `random.Random` に限定し、`seed` で再現可能にする
 
@@ -39,8 +40,28 @@ neu/
   __init__.py       公開 API の再エクスポート
   engine.py         ゲームエンジン本体（UI・I/O 非依存）
   cli.py            動作確認用 CLI（人間1人 + ランダム Bot）
+gameplatform/
+  games.py          GameDefinition とゲーム登録
+  rooms.py          ルーム管理・開始・CPU 駆動（共通基盤）
+  realtime.py       SSE の購読・チケット
+  sessions.py       プレイヤートークン
+  errors.py         共通例外
+games/neu/
+  __init__.py       GameDefinition(key="neu", title="ノイ") の登録
+  adapter.py        GameState と共通基盤をつなぐアダプタ
+  cards.py         カード表示用メタ情報・一意な cardId
+  view.py           プレイヤーごとの公開ビュー
+web/
+  __init__.py       Flask アプリ生成・static_folder 設定
+  api.py            ルーム / 対戦 / SSE / health の JSON API
+  templates/        index.html, room.html
+static/
+  room.js           ルーム画面の素の JavaScript
+  style.css         スマホ縦画面優先のスタイル
+  img/cards/        カード画像18枚
+app.py              開発サーバー起動
+health_app.py       ヘルスチェック単体起動
 tests/
-  __init__.py
   helpers.py        テスト用の状態生成ヘルパ
   test_deck.py      デッキ構成
   test_numbers.py   数字カードと合計、101 超え
@@ -49,7 +70,8 @@ tests/
   test_round.py     ラウンド開始・終了、ディーラー、脱落、ゲーム終了
   test_random.py    ランダムプレイの終了性・保存則・再現性
   test_view.py      view_for / to_dict / from_dict
-static/img/cards/   将来カード画像を置く場所（現在は .gitkeep のみ）
+  test_neu_adapter.py アダプタ・公開 view・構造化ログ・ラウンド結果
+  test_api.py       部屋作成→参加→開始→対戦→終了の API 結合
 init.md             このファイル
 README.md
 LICENSE             All rights reserved
@@ -249,13 +271,15 @@ Action(player, card_index, target=None)
 ### テスト実行
 
 ```bash
-python -m unittest discover
+python3 -m unittest discover
 ```
+
+現在 105 テスト（エンジン・アダプタ・API 結合）。
 
 ### CLI
 
 ```bash
-python -m neu.cli --players 4 --seed 1
+python3 -m neu.cli --players 4 --seed 1
 ```
 
 - 座席0が人間、他は合法手からランダムに選ぶ簡易 Bot。
@@ -264,33 +288,113 @@ python -m neu.cli --players 4 --seed 1
 
 ---
 
-## 8. 現在の進捗
+## 8. フェーズ2: Web UI / API
+
+### 起動
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 app.py --port 5000
+```
+
+ブラウザで `http://localhost:5000/` を開く。カード画像は `static/img/cards/` から配信する。
+
+### 構成
+
+- `hannin-wa-odoru` と同じ共通基盤（`gameplatform/` + `games/<key>/`）を使う。
+- `games/neu/__init__.py` で `GameDefinition(key="neu", title="ノイ", min_players=2, max_players=7)` を登録。
+- `games/neu/adapter.py` の `NeuGame` が `GameState` を保持し、`revision` / `phase` / `start()` を提供。
+- ルール判定はすべて `neu/engine.py` に委譲。API / UI 側で合法手やバースト判定を再実装しない。
+- カードの物理的な一意性は `cardId = "<カードID>#<copy>"`（例: `n10#3`）。画像名・ログには `Card.id` を使う。
+- 公開 view は他人の手札の中身を一切含まず、`me.hand` だけが中身を持つ。
+- `events` は UI 用の構造化ログ（`seq` / `kind` / `playerId` / `cardId` / `sumAfter` / `targetId` など）。
+- `lastRound` はラウンド遷移を前後比較して生成し、敗者・合計・残りチップ・脱落・ゲーム終了を返す。
+
+### 主な API
+
+| メソッド | パス | 内容 |
+| --- | --- | --- |
+| `GET` | `/health`, `/api/health` | タイトル・バージョン・状態・進行中ルーム数 |
+| `GET` | `/api/games` | 登録ゲーム一覧 |
+| `GET` | `/api/rooms` | ルーム一覧 |
+| `POST` | `/api/rooms` | ルーム作成 |
+| `POST` | `/api/rooms/<id>/join` | 参加 |
+| `POST` | `/api/rooms/<id>/leave` | 退出（開始前のみ） |
+| `POST` | `/api/rooms/<id>/host` | ホスト引き継ぎ（開始前のみ） |
+| `GET` | `/api/rooms/<id>/state` | 自分の視点の状態 |
+| `POST` | `/api/rooms/<id>/start` | ゲーム開始（ホストのみ） |
+| `POST` | `/api/rooms/<id>/actions` | カードを出す（`type: "play"`, `cardId`, `expectedRevision`, SHOT は `target`） |
+| `POST` | `/api/rooms/<id>/stream-ticket` | SSE 用の短命チケット |
+| `GET` | `/api/rooms/<id>/events` | SSE（変更通知） |
+
+認証は `X-Player-Token`（または `Authorization: Bearer`）。トークンは localStorage の
+`neu:<roomId>` に保存する。
+
+### UI（スマホ縦画面優先）
+
+- 場の合計を特大表示。ラウンド・向き・残り枚数・山札/捨て札・場札をまとめて表示。
+- 手札は3枚を横並び。カードをタップして選択し、「出す」で確定する2タップ操作。
+- 各カードに「出すと合計 XX」を表示。101 を超える場合は赤で警告し、確認ボタンも警告文に変える。
+- SHOT は指名先を選ぶまで確定できない。
+- DOUBLE 中の1枚目はサーバーが合法手から除外し、UI でも「1枚目に出せません」と表示する。
+- 手番が回ってきたらプロンプト・ページタイトル・（対応端末では）振動で通知。
+- ラウンド敗者が出たらトーストで「バースト／合計／残りチップ／脱落」を演出。
+- 他人の手札は枚数のみ。裏面は CSS で描画する（`back.png` は未提供）。
+- 画像が404でも CSS の仮カードで遊べる（`onerror` で画像を隠す）。
+- ゲーム終了時は勝者とチップ順位をオーバーレイ表示。
+
+### 未対応（フェーズ3以降）
+
+- Docker 化、共通ロビー登録、VPS 展開。
+- CPU 対戦。現在 `cpu_driver=None` のため、`cpuCount > 0` での開始は API が拒否する。
+- `back.png` / `chip.png` は未提供。裏面・チップは CSS で代替している。
+
+---
+
+## 9. 現在の進捗
 
 - [x] リポジトリ初期化（README / LICENSE / init.md / ディレクトリ）
 - [x] エンジン本体（デッキ・状態・合法手・適用・ラウンド進行・view・JSON 変換）
 - [x] テスト一式（デッキ / 数字 / DOUBLE / 手番 / ラウンド / ランダム / view）
 - [x] CLI（人間1人 + ランダム Bot）
-- [ ] フェーズ2: Flask + Web UI
-- [ ] フェーズ3: Docker / ロビー登録 / VPS 展開
+- [x] フェーズ2: 共通基盤 + Flask API + スマホ向け Web UI
+  - [x] `gameplatform/` のコピーと `/health`
+  - [x] `NeuGame` アダプタ・公開 view・構造化ログ・lastRound
+  - [x] 部屋作成→参加→開始→ランダム対戦→終了の API 結合テスト
+  - [x] スマホ縦画面の対戦 UI（2タップ操作・SHOT 指名・警告・結果表示）
+  - [x] 全 105 テスト通過
+- [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
 - [ ] フェーズ4: CPU 強化
 
 ---
 
-## 9. 将来のメモ
+## 10. 将来のメモ
 
 ### カード画像
 
-`static/img/cards/` に、カードIDと同名の PNG を置く。
+`static/img/cards/` に、カードIDと同名の PNG を置く（18枚追加済み）。
 
 - 数字: `n1.png` 〜 `n9.png`, `n10.png`, `n50.png`, `n101.png`, `nm1.png`, `nm10.png`
 - 指示: `pass.png`, `turn.png`, `shot.png`, `double.png`
-- その他: `back.png`（裏面）, `chip.png`（チップ）
+- 未提供: `back.png`（裏面）, `chip.png`（チップ）
 
-画像がないときは CSS の仮カードで描画する（フェーズ2以降）。
+裏面とチップは CSS で描画している。画像がないカードも CSS の仮カードで表示できる。
 
-### フェーズ2への引き継ぎ
+### フェーズ3への引き継ぎ
 
-- `view_for(state, seat)` の戻り値をそのまま JSON で返せる。
-- 状態の保存・復元は `to_dict` / `from_dict`（乱数状態込み）。
-- 合法手は `legal_actions`、適用は `apply`。UI 側でルールを再実装しないこと。
-- `Action` は `player`, `card_index`, `target` の3つ。API のリクエスト形式にそのまま使える。
+- Docker 化する場合は `app.py` を gunicorn から起動する（`requirements.txt` に gunicorn あり）。
+- 共通ロビー (game-lobby) へは `GET /health` の
+  `title` / `version` / `status` / `playing_rooms` をそのまま登録できる。
+- `VERSION` はビルド時に生成する想定で `.gitignore` 済み。無い場合 `/health` の version は `"dev"`。
+- `SECRET_KEY` は環境変数で設定する。未設定時は起動ごとのランダム値になる。
+- 共通ロビーへ戻るリンクは、同じホストのルート（既定ポート80）を指す。
+- ルームはメモリ上に保持する（`gameplatform.rooms`）。再起動で消えるため、永続化はフェーズ3以降の課題。
+
+### フェーズ4（CPU）への引き継ぎ
+
+- `games/neu/__init__.py` の `cpu_driver=None` を、`games/neu/cpu.py` の実装に差し替える。
+- 共通基盤側は `cpu_driver(game, cpu_ids, config)` が `step(game) -> bool` を持つオブジェクトを期待する
+  （1手進めたら `True`、打てない/終了なら `False`）。
+- CPU も必ず `legal_actions` / `apply` を通す。UI や API にルールを足さない。
+- 開始 UI は現在 CPU 人数を出していない。`cpu_driver` を登録したら
+  `startOptions` 相当の人数選択を戻す。
