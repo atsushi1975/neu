@@ -66,6 +66,39 @@ class ViewTest(unittest.TestCase):
         restored = from_dict(json.loads(text))
         self.assertEqual(to_dict(restored), data)
 
+    def test_json_roundtrip_preserves_round_results(self):
+        state = new_game(3, seed=3)
+        state.round_results.append(
+            {
+                "round": 1,
+                "loser": 0,
+                "reason": "no_safe_card",
+                "card_id": None,
+                "sum_after": None,
+                "chips_left": 2,
+                "eliminated": False,
+                "game_over": False,
+                "winner": None,
+                "hand": [
+                    {"id": "n50", "kind": "number", "value": 50, "copy": 1},
+                    {"id": "n50", "kind": "number", "value": 50, "copy": 2},
+                    {"id": "n10", "kind": "number", "value": 10, "copy": 1},
+                ],
+            }
+        )
+        data = to_dict(state)
+        restored = from_dict(json.loads(json.dumps(data)))
+        self.assertEqual(to_dict(restored), data)
+        self.assertEqual(len(restored.round_results), 1)
+        self.assertEqual(restored.round_results[0]["reason"], "no_safe_card")
+
+    def test_from_dict_accepts_old_format_without_round_results(self):
+        data = to_dict(new_game(3, seed=3))
+        self.assertIn("round_results", data)
+        data.pop("round_results")
+        state = from_dict(data)
+        self.assertEqual(state.round_results, [])
+
     def test_roundtrip_continues_identically(self):
         state = new_game(4, seed=11)
         restored = from_dict(json.loads(json.dumps(to_dict(state))))

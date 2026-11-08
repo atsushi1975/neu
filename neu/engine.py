@@ -27,8 +27,12 @@ MIN_PLAYERS = 2
 MAX_PLAYERS = 7
 STARTING_CHIPS = 3
 HAND_SIZE = 3
-INITIAL_DEALER = 0
+# 最初のディーラー。None なら全員（開始時は全員生存）からランダムに1人選ぶ。
+# 整数が入っていればその席に固定する（テスト・CLI の再現用）。
+INITIAL_DEALER: Optional[int] = None
 LOSING_LIMIT = 101
+# 安全なカードが見つからずに連鎖でラウンド負けが続く場合の上限（保険）。
+MAX_LOSS_CHAIN = 16
 
 # (カードID, kind, value, 枚数)
 # kind: "number"（通常の数字）, "hundred"（n101）, "pass", "turn", "shot", "double"
@@ -163,6 +167,7 @@ class GameState:
     winner: Optional[int] = None
     round_number: int = 0
     events: list[str] = field(default_factory=list)
+    round_results: list[dict[str, Any]] = field(default_factory=list)
     rng: random.Random = field(default_factory=random.Random)
 
 
@@ -231,12 +236,17 @@ def _refill(state: GameState, player: PlayerState) -> None:
 # ---------------------------------------------------------------------------
 
 
-def new_game(num_players: int, seed: Optional[int] = None) -> GameState:
+def new_game(
+    num_players: int, seed: Optional[int] = None, dealer: Optional[int] = None
+) -> GameState:
     """新しいゲームを初期化する。
 
     Args:
         num_players: プレイヤー人数（2〜7）。
         seed: 乱数シード。同じ seed と同じ操作で同じ展開になる。
+        dealer: 最初のディーラーの席番号（None なら :data:`INITIAL_DEALER` に従う。
+            既定の :data:`INITIAL_DEALER` は None = 全員からランダムに1人選ぶ）。
+            指定があればその席に固定する（テスト・CLI の再現用）。
     """
     if isinstance(num_players, bool) or not isinstance(num_players, int):
         raise InvalidSetup("プレイヤー人数は整数で指定してください")
@@ -254,7 +264,7 @@ def new_game(num_players: int, seed: Optional[int] = None) -> GameState:
         field_card=None,
         total=0,
         direction=1,
-        dealer=INITIAL_DEALER % num_players,
+        dealer=0,
         current_player=None,
         cards_remaining=1,
         phase="playing",
@@ -263,6 +273,20 @@ def new_game(num_players: int, seed: Optional[int] = None) -> GameState:
         events=[],
         rng=rng,
     )
+    # ディーラー選択 → ラウンド開始時のシャッフル・配布、の順で乱数を使う
+    # （同じ seed なら同じ展開になる）。
+    resolved_dealer = dealer if dealer is not None else INITIAL_DEALER
+    if resolved_dealer is None:
+        state.dealer = state.rng.randrange(num_players)
+    else:
+        state.dealer = resolved_dealer % num_players
+    state.current_player = None
+    state.cards_remaining = 1
+    state.phase = "playing"
+    state.winner = None
+    state.round_number = 0
+    state.events = []
+    state.round_results = []
     start_round(state)
     return state
 
@@ -314,10 +338,10 @@ def start_round(state: GameState) -> GameState:
         # n101 と指示カードは捨て札へ
         state.discard.append(card)
 
-    # 4. 向きをリセットし、ディーラーの次の人から始める
+    # 4. 向きをリセットし、最初の手番を決める（ディーラー本人。修正2）
     state.direction = 1
     state.round_number += 1
-    state.current_player = next_alive(state, state.dealer, state.direction)
+    state.current_player = state.dealer
     state.cards_remaining = 1
 
     field_label = state.field_card.id if state.field_card else "-"
@@ -325,6 +349,20 @@ def start_round(state: GameState) -> GameState:
         f"ラウンド{state.round_number} 開始: ディーラー席{state.dealer} / "
         f"場札 {field_label} (合計 {state.total}) / 手番 席{state.current_player}"
     )
+
+    # 最初の手番の人も、「出せるカードがすべて101超え」ならこのラウンドの負け。
+    # 負けた場合は _lose_round → start_round が呼ばれるため、ここは while で連鎖を処理する。
+    # チップが減るので必ず終了するが、保険として上限ガードを入れる。
+    losses = 0
+    while (
+        state.phase == "playing"
+        and state.current_player is not None
+        and not _has_safe_action(state)
+    ):
+        if losses >= MAX_LOSS_CHAIN:
+            raise NeuError("出せるカードがすべて101超えのため、ラウンド負けの連鎖が続いています")
+        losses += 1
+        _lose_round(state, state.players[state.current_player], reason="no_safe_card")
     return state
 
 
@@ -356,6 +394,53 @@ def legal_actions(state: GameState) -> list[Action]:
             actions.append(Action(player=player.seat, card_index=index))
 
     return actions
+
+
+def _projected_total(state: GameState, card: Card) -> int:
+    """カードを出した後の合計を計算する（バースト判定と安全判定で共用する）。"""
+    if card.kind == "hundred":
+        return LOSING_LIMIT
+    if card.kind == "number":
+        return state.total + card.value
+    return state.total
+
+
+def safe_actions(state: GameState) -> list[Action]:
+    """現在の手番で「出したとしても合計が 101 を超えない」安全な合法手を返す。
+
+    ``legal_actions`` の結果のうち、カードを出しても合計が :data:`LOSING_LIMIT`
+    を超えないものだけを安全な手として返す。PASS / TURN / SHOT / DOUBLE(法的に出せる
+    場合)・n101・マイナスカードは常に安全。DOUBLE 中（``cards_remaining >= 2``）の
+    1枚目に出せない DOUBLE は合法手に含まれないため、自動的に安全手の対象外になる。
+    """
+    if state.phase != "playing" or state.current_player is None:
+        return []
+    player = state.players[state.current_player]
+    safe: list[Action] = []
+    for action in legal_actions(state):
+        card = player.hand[action.card_index]
+        if _projected_total(state, card) > LOSING_LIMIT:
+            continue
+        safe.append(action)
+    return safe
+
+
+def _has_safe_action(state: GameState) -> bool:
+    """現在の手番の人が安全な手を1つ以上持っているか。"""
+    return bool(safe_actions(state))
+
+
+def _check_no_safe_card(state: GameState) -> None:
+    """現在の手番の人が安全なカードを持てない場合、そのラウンドの負けを宣言する。
+
+    判定は「次に出す人が決まった直後」に行う。安全なカードがなければ
+    :func:`_lose_round`（``reason="no_safe_card"``）でラウンドを負ける。
+    """
+    if state.phase != "playing" or state.current_player is None:
+        return
+    if _has_safe_action(state):
+        return
+    _lose_round(state, state.players[state.current_player], reason="no_safe_card")
 
 
 # ---------------------------------------------------------------------------
@@ -422,17 +507,18 @@ def _apply_inplace(state: GameState, action: Action) -> None:
 
     # --- 数字カード -----------------------------------------------------
     if card.is_number:
+        sum_after = _projected_total(state, card)
         if card.kind == "hundred":
             state.total = LOSING_LIMIT
         else:
             state.total += card.value
 
-        if state.total > LOSING_LIMIT:
+        if sum_after > LOSING_LIMIT:
             state.events.append(
                 f"席{player.seat} が {card.id} を出して合計 {state.total} "
                 f"→ 101超えでラウンド負け"
             )
-            _lose_round(state, player)
+            _lose_round(state, player, reason="bust", card=card, sum_after=sum_after)
             return
 
         state.events.append(f"席{player.seat} が {card.id} を出した (合計 {state.total})")
@@ -441,6 +527,9 @@ def _apply_inplace(state: GameState, action: Action) -> None:
         if state.cards_remaining <= 0:
             # 手番終了。次の人の必要枚数は 1
             _end_turn(state, next_alive(state, player.seat, state.direction), 1)
+        # 手番が次の人へ移った、または同じ人が残り枚数を出すべきになった直後なので、
+        # 安全なカードが無いか判定する。
+        _check_no_safe_card(state)
         return
 
     # --- 指示カード -----------------------------------------------------
@@ -448,6 +537,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
         state.events.append(f"席{player.seat} が PASS (合計 {state.total} のまま)")
         # 必要枚数が残っている場合は、その義務が次の人へそのまま移る
         _end_turn(state, next_alive(state, player.seat, state.direction), remaining_before)
+        _check_no_safe_card(state)
         return
 
     if card.kind == "turn":
@@ -459,6 +549,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
             next_alive(state, player.seat, state.direction),
             remaining_before,
         )
+        _check_no_safe_card(state)
         return
 
     if card.kind == "shot":
@@ -466,23 +557,32 @@ def _apply_inplace(state: GameState, action: Action) -> None:
         assert target is not None
         state.events.append(f"席{player.seat} が SHOT で席{target} を指名")
         _end_turn(state, target, remaining_before)
+        _check_no_safe_card(state)
         return
 
     if card.kind == "double":
         state.events.append(f"席{player.seat} が DOUBLE (次の手番は2枚)")
         _end_turn(state, next_alive(state, player.seat, state.direction), 2)
+        _check_no_safe_card(state)
         return
 
     raise IllegalAction(f"未知のカード種別です: {card.kind}")
 
 
-def _end_turn(state: GameState, next_player: int, required: int) -> None:
-    state.current_player = next_player
-    state.cards_remaining = required
+def _lose_round(
+    state: GameState,
+    loser: PlayerState,
+    *,
+    reason: str = "bust",
+    card: Optional[Card] = None,
+    sum_after: Optional[int] = None,
+) -> None:
+    """ラウンドの負け処理。チップ減少・脱落・ゲーム終了・次ラウンド開始。
 
-
-def _lose_round(state: GameState, loser: PlayerState) -> None:
-    """ラウンドの負け処理。チップ減少・脱落・ゲーム終了・次ラウンド開始。"""
+    ``reason`` は ``"bust"``（カードを出した結果 101 超え）か
+    ``"no_safe_card"``（出せるカードがすべて 101 超えのため打てない）か。
+    """
+    lost_round = state.round_number
     loser.chips -= 1
     if loser.chips <= 0:
         loser.chips = 0
@@ -490,23 +590,47 @@ def _lose_round(state: GameState, loser: PlayerState) -> None:
         state.events.append(f"席{loser.seat} はチップを失って脱落した")
     else:
         state.events.append(f"席{loser.seat} はチップを1枚失った (残り {loser.chips}枚)")
+    if reason == "no_safe_card":
+        state.events.append(f"席{loser.seat} は出せるカードがすべて101を超えるためラウンド負け")
 
-    survivors = alive_players(state)
-    if len(survivors) == 1:
+    game_over = False
+    winner_seat: Optional[int] = None
+    if len(alive_players(state)) == 1:
         state.phase = "game_over"
-        state.winner = survivors[0].seat
+        state.winner = alive_players(state)[0].seat
         state.current_player = None
         state.cards_remaining = 1
+        game_over = True
+        winner_seat = state.winner
         state.events.append(f"ゲーム終了。勝者は席{state.winner}!")
-        return
 
-    # 次のディーラー: 負けた人。脱落した場合はその時点の進行方向の隣の生存者。
-    if loser.alive:
-        state.dealer = loser.seat
-    else:
-        state.dealer = next_alive(state, loser.seat, state.direction)
+    state.round_results.append(
+        {
+            "round": lost_round,
+            "loser": loser.seat,
+            "reason": reason,
+            "card_id": card.id if reason == "bust" and card is not None else None,
+            "sum_after": sum_after if reason == "bust" else None,
+            "chips_left": loser.chips,
+            "eliminated": not loser.alive,
+            "game_over": game_over,
+            "winner": winner_seat if game_over else None,
+            "hand": [card_to_dict(c) for c in loser.hand] if reason == "no_safe_card" else None,
+        }
+    )
 
-    start_round(state)
+    if not game_over:
+        # 次のディーラー: 負けた人。脱落した場合はその時点の進行方向の隣の生存者。
+        if loser.alive:
+            state.dealer = loser.seat
+        else:
+            state.dealer = next_alive(state, loser.seat, state.direction)
+        start_round(state)
+
+
+def _end_turn(state: GameState, next_player: int, required: int) -> None:
+    state.current_player = next_player
+    state.cards_remaining = required
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +729,7 @@ def to_dict(state: GameState) -> dict[str, Any]:
         "winner": state.winner,
         "round": state.round_number,
         "events": list(state.events),
+        "round_results": [dict(result) for result in state.round_results],
         "rng_state": _tuples_to_lists(state.rng.getstate()),
     }
 
@@ -645,5 +770,8 @@ def from_dict(data: dict[str, Any]) -> GameState:
         winner=None if winner_seat is None else int(winner_seat),
         round_number=int(data.get("round", 0)),
         events=list(data.get("events", [])),
+        round_results=[
+            dict(result) for result in (data.get("round_results") or [])
+        ],
         rng=rng,
     )

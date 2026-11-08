@@ -8,6 +8,7 @@ from neu.engine import (
     is_game_over,
     legal_actions,
     new_game,
+    safe_actions,
 )
 
 from tests.helpers import card, cards, filler, make_state, start_round_with_draws
@@ -25,7 +26,8 @@ class RoundStartTest(unittest.TestCase):
         self.assertEqual([len(p.hand) for p in state.players], [3, 3, 3])
         self.assertEqual(state.round_number, 1)
         self.assertEqual(state.direction, 1)
-        self.assertEqual(state.current_player, 1)
+        # 最初の手番はディーラー本人（修正2）
+        self.assertEqual(state.current_player, 0)
 
     def test_initial_field_101_is_discarded(self):
         deal = cards("n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9")
@@ -44,10 +46,10 @@ class RoundStartTest(unittest.TestCase):
                 self.assertEqual(state.field_card.id, card_id)
                 self.assertEqual(state.total, expected)
 
-    def test_dealing_starts_from_dealer_next(self):
+    def test_first_player_is_the_dealer(self):
         deal = cards("n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9")
         draws = deal + cards("n4")
-        for dealer, expected_first in ((0, 1), (1, 2), (2, 0)):
+        for dealer, expected_first in ((0, 0), (1, 1), (2, 2)):
             with self.subTest(dealer=dealer):
                 state = start_round_with_draws(draws, num_players=3, dealer=dealer)
                 self.assertEqual(state.current_player, expected_first)
@@ -65,7 +67,8 @@ class RoundEndTest(unittest.TestCase):
         self.assertEqual(after.dealer, 0)
         self.assertEqual(after.round_number, 2)
         self.assertEqual(after.direction, 1)
-        self.assertEqual(after.current_player, 1)
+        # 次のラウンドの最初の手番はディーラー本人（＝負けた人）
+        self.assertEqual(after.current_player, 0)
 
     def test_dealer_moves_clockwise_when_loser_eliminated(self):
         state = self._losing_state(chips=[1, 3, 3], dealer=0)
@@ -74,7 +77,8 @@ class RoundEndTest(unittest.TestCase):
         self.assertFalse(after.players[0].alive)
         self.assertEqual(after.dealer, 1)
         self.assertEqual(after.direction, 1)
-        self.assertEqual(after.current_player, 2)
+        # 脱落したディーラーの次（進行方向の隣）が新しいディーラー兼最初の手番
+        self.assertEqual(after.current_player, 1)
 
     def test_dealer_moves_counterclockwise_when_direction_reversed(self):
         state = self._losing_state(chips=[1, 3, 3], dealer=0, direction=-1)
@@ -82,7 +86,7 @@ class RoundEndTest(unittest.TestCase):
         self.assertFalse(after.players[0].alive)
         self.assertEqual(after.dealer, 2)
         self.assertEqual(after.direction, 1)  # 新ラウンドで時計回りに戻る
-        self.assertEqual(after.current_player, 1)
+        self.assertEqual(after.current_player, 2)
 
     def test_direction_resets_to_clockwise_on_new_round(self):
         state = self._losing_state(chips=[3, 3, 3], direction=-1)
@@ -136,6 +140,98 @@ class RoundEndTest(unittest.TestCase):
             + (1 if state.field_card else 0)
         )
         assert total == 58, total
+
+
+class NoSafeCardTest(unittest.TestCase):
+    """「出せるカードがすべて101超え」→ カードを出さずにラウンド負け（修正1）。"""
+
+    def _waiting_state(self, loser_hand, chips=None):
+        # 席0 が安全な手（PASS）を持ち、席1 が安全なカードを持たない状態を作る。
+        if chips is None:
+            chips = [3, 3, 3]
+        return make_state(
+            [cards("n5", "pass", "pass"), loser_hand],
+            total=100,
+            current=0,
+            chips=chips,
+        )
+
+    def test_all_busting_cards_lose_without_playing(self):
+        state = self._waiting_state(cards("n50", "n50", "n10"))
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番へ
+        result = after.round_results[-1]
+        self.assertEqual(result["reason"], "no_safe_card")
+        self.assertEqual(result["loser"], 1)
+        self.assertIsNone(result["card_id"])
+        self.assertIsNone(result["sum_after"])
+        self.assertEqual(result["chips_left"], 2)
+        self.assertEqual(after.players[1].chips, 2)
+        self.assertTrue(after.players[1].alive)
+        self.assertEqual(after.round_number, 2)
+        self.assertIn("出せるカードがすべて101を超えるため", after.events[-2])
+
+    def test_safe_n101_keeps_the_round_alive(self):
+        state = self._waiting_state(cards("n101", "n50", "n50"))
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番へ
+        self.assertEqual(after.round_results, [])
+        self.assertEqual(after.phase, "playing")
+        self.assertEqual(after.current_player, 1)
+
+    def test_safe_pass_keeps_the_round_alive(self):
+        state = self._waiting_state(cards("pass", "n50", "n50"))
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番へ（PASS は安全）
+        self.assertEqual(after.round_results, [])
+        self.assertEqual(after.current_player, 1)
+
+    def test_safe_negative_keeps_the_round_alive(self):
+        state = self._waiting_state(cards("nm1", "n50", "n50"))
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番へ（nm1 は安全）
+        self.assertEqual(after.round_results, [])
+        self.assertEqual(after.current_player, 1)
+
+    def test_double_as_first_card_is_not_a_safe_card(self):
+        state = make_state(
+            [cards("double", "n50", "n50")] + [cards("n1", "n1", "n1")] * 2,
+            total=90,
+            remaining=2,
+            current=0,
+        )
+        # DOUBLE 中（cards_remaining=2）の1枚目には DOUBLE を出せないので合法手にも入らない。
+        self.assertEqual([a.card_index for a in legal_actions(state)], [1, 2])
+        # 安全な手も無い（n50 は合計 140 で 101 超え）。
+        self.assertEqual(safe_actions(state), [])
+
+    def test_double_second_card_is_checked_before_playing(self):
+        state = make_state(
+            [cards("n50", "n50", "n50"), cards("n1", "n1", "n1")],
+            total=40,
+            remaining=2,
+            current=0,
+            deck=[card("n50"), card("n50")],
+        )
+        # 1枚目 n50 → 合計 90、残り1枚を出す義務 → 2枚目も n50 で 140 になり安全でない。
+        after = apply(state, Action(0, 0))
+        self.assertEqual(after.round_results[-1]["reason"], "no_safe_card")
+        self.assertEqual(after.players[0].chips, 2)
+
+    def test_no_safe_card_can_eliminate_and_end_the_game(self):
+        # 手札がすべて101超えの人がチップ1枚しか持っていない → 脱落してゲーム終了。
+        state = make_state(
+            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10")],
+            total=100,
+            current=0,
+            chips=[3, 1],
+        )
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番へ
+        self.assertTrue(is_game_over(after))
+        self.assertEqual(after.phase, "game_over")
+        self.assertEqual(after.winner, 0)
+        result = after.round_results[-1]
+        self.assertEqual(result["reason"], "no_safe_card")
+        self.assertTrue(result["eliminated"])
+        self.assertTrue(result["game_over"])
+        self.assertEqual(result["winner"], 0)
+        self.assertEqual(result["chips_left"], 0)
 
 
 class RefillTest(unittest.TestCase):

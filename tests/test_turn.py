@@ -119,13 +119,14 @@ class TurnOrderTest(unittest.TestCase):
         with self.assertRaises(IllegalAction):
             apply(state, Action(0, 0, target=1))
 
-    def test_first_player_is_after_dealer(self):
+    def test_first_player_is_the_dealer(self):
         for players in range(2, 8):
             with self.subTest(players=players):
-                state = new_game(players, seed=players)
+                state = new_game(players, seed=players, dealer=0)
                 self.assertEqual(state.dealer, 0)
                 self.assertEqual(state.direction, 1)
-                self.assertEqual(state.current_player, (state.dealer + 1) % players)
+                # 最初の手番はディーラー本人（修正2）
+                self.assertEqual(state.current_player, 0)
                 self.assertTrue(all(len(p.hand) == 3 for p in state.players))
 
 

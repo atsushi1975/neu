@@ -4,6 +4,7 @@
 """
 
 from .engine import (
+    INITIAL_DEALER,
     MAX_PLAYERS,
     MIN_PLAYERS,
     STARTING_CHIPS,
@@ -27,6 +28,7 @@ from .engine import (
     legal_actions,
     new_game,
     next_alive,
+    safe_actions,
     start_round,
     to_dict,
     view_for,
@@ -34,6 +36,7 @@ from .engine import (
 )
 
 __all__ = [
+    "INITIAL_DEALER",
     "MAX_PLAYERS",
     "MIN_PLAYERS",
     "STARTING_CHIPS",
@@ -57,6 +60,7 @@ __all__ = [
     "legal_actions",
     "new_game",
     "next_alive",
+    "safe_actions",
     "start_round",
     "to_dict",
     "view_for",

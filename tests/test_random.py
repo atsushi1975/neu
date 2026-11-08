@@ -4,10 +4,12 @@ import random
 import unittest
 
 from neu.engine import (
+    INITIAL_DEALER,
     apply,
     is_game_over,
     legal_actions,
     new_game,
+    safe_actions,
     to_dict,
 )
 
@@ -33,6 +35,11 @@ class RandomPlayTest(unittest.TestCase):
             self.assertTrue(state.players[state.current_player].alive)
             self.assertIn(state.cards_remaining, (1, 2))
             self.assertTrue(legal_actions(state))
+            # 手番の人は必ず「出しても101を超えない」安全な手を1つ以上持っている（修正1）。
+            self.assertTrue(
+                safe_actions(state),
+                f"seat {state.current_player} に安全な手がありません",
+            )
 
     def _play(self, players, seed, max_moves=MAX_MOVES):
         state = new_game(players, seed=seed)
@@ -69,6 +76,22 @@ class RandomPlayTest(unittest.TestCase):
         first, _ = self._play(4, 1)
         second, _ = self._play(4, 2)
         self.assertNotEqual(to_dict(first), to_dict(second))
+
+    def test_initial_dealer_is_random_and_first_player_is_the_dealer(self):
+        self.assertIsNone(INITIAL_DEALER)
+        for seed in range(200):
+            with self.subTest(seed=seed):
+                state = new_game(3, seed=seed)
+                # 最初の手番はディーラー本人（修正2・4）
+                self.assertEqual(state.current_player, state.dealer)
+
+    def test_same_seed_gives_the_same_dealer(self):
+        self.assertEqual(new_game(4, seed=7).dealer, new_game(4, seed=7).dealer)
+        self.assertEqual(new_game(4, seed=7, dealer=2).dealer, 2)
+
+    def test_random_dealer_covers_all_seats(self):
+        dealers = {new_game(3, seed=seed).dealer for seed in range(200)}
+        self.assertEqual(dealers, {0, 1, 2})
 
     def test_random_play_never_has_empty_legal_actions(self):
         # _assert_invariants 内で毎手番確認しているが、代表例を明示的にも確認する
