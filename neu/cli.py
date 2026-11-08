@@ -184,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="乱数シード（固定すると山札の並びが再現される）",
     )
+    parser.add_argument(
+        "--dealer",
+        type=int,
+        default=None,
+        help="最初のディーラーの席番号（指定しない場合はランダム。テスト・CLI の再現用）",
+    )
     return parser
 
 
@@ -191,16 +197,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        state = new_game(args.players, seed=args.seed)
+        state = new_game(args.players, seed=args.seed, dealer=args.dealer)
     except InvalidSetup as error:
         print(f"エラー: {error}", flush=True)
         return 2
 
     bot_rng = random.Random(0 if args.seed is None else args.seed)
 
+    dealer_label = f"席{args.dealer}" if args.dealer is not None else "ランダム"
     print("=" * 64)
     print("ノイ (Neu) - 動作確認用 CLI")
-    print(f"プレイヤー: {args.players}人 / seed: {args.seed}")
+    print(f"プレイヤー: {args.players}人 / seed: {args.seed} / ディーラー: {dealer_label}")
+    print(f"最初の手番: 席{state.current_player}（ディーラー席{state.dealer}）")
     print("あなたは席0です。カード番号を入力して出してください。")
     print("=" * 64)
 

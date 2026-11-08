@@ -107,7 +107,8 @@ LICENSE             All rights reserved
 - プレイヤーは 2〜7 人。
 - 各自チップ3枚 + 手札3枚。
 - 順番は座席順。初期の進行方向は時計回り（座席番号の増加方向 = `direction = +1`）。
-- 初期ディーラーは座席0（仮置き。`INITIAL_DEALER` 定数）。
+- 初期ディーラーはランダムに1人（`neu.engine.INITIAL_DEALER = None`、状態の RNG から全員からシャッフルして選ぶ。
+  整数を `new_game(dealer=...)` で指定すれば固定できる（テスト・CLI の再現用）。)
 
 ### 数字カードと合計 (sum)
 
@@ -117,6 +118,15 @@ LICENSE             All rights reserved
   - `n101` は「合計を 101 にする」（加算ではない）。
 - 合計が 0 未満になることは許可する。
 - 合計が **101 を超えたら**、出したプレイヤーがそのラウンドの負け（回避手段なし）。
+- また、手番の人が「**次に出すカードがどれを出しても合計が 101 を超える**」状態に
+  なったら、カードを出す前に、その人がそのラウンドの負けになる（**安全なカード無し負け**）。
+  - 「安全なカード」= 合法手のうち、出しても合計が 101 を超えない手。
+    PASS・TURN・SHOT・DOUBLE（合法なら）・`n101`・`-1`・`-10` は常に安全。
+    `n101` は合計が 101 になるだけで安全（超えない）。
+    DOUBLE 中（`cards_remaining >= 2`）の1枚目に出せない DOUBLE は手札に数えない
+    （1枚目では出せないので安全カードに数えない）。
+- 安全なカードが1枚も無ければ、カードを出さずにその人のラウンド負け（バースト時と同じ
+  チップ減・脱落・ゲーム終了・次ラウンド開始の処理を行う）。負けが連鎖して起きることもある。
 
 ### 指示カード
 
@@ -135,7 +145,8 @@ LICENSE             All rights reserved
 
 ### ラウンドの終了とチップ
 
-- 合計が 101 を超えたプレイヤーがラウンドの負け。
+- 合計が 101 を超えたプレイヤーがラウンドの負け（バースト）。
+- 手番の人が出せるカードがすべて 101 を超える場合は、カードを出さずにラウンドの負け（安全なカード無し）。
 - 負けた人はチップ1枚を場に置く（戻らない）。
 - チップが 0 になった人は脱落。
 - 1人だけ残ったらゲーム終了、その人が勝者。
@@ -147,14 +158,14 @@ LICENSE             All rights reserved
 - ディーラーは前ラウンドの負け。
 - 負けた人が脱落した場合は、その人の次（**その時点の進行方向の隣**）の生存プレイヤー。
 - 回る向きは新ラウンドで時計回り（`+1`）にリセット。
-- 最初の手番はディーラーの次の人（時計回り）。
+- 最初の手番は**ディーラー本人**（＝前ラウンドの負けた人。最初のラウンドでは最初のディーラー）。
 
 ### ラウンド開始時の初期場札
 
 - 山札の上から、**数字カード（`n1`〜`n9`, `n10`, `n50`, `nm1`, `nm10`）が出るまで**めくる。
 - `n101` と指示カード（`pass`, `turn`, `shot`, `double`）が出たら捨て札へ送ってやり直す。
 - 出た数字カードで合計を初期化する（`nm1`・`nm10` なら合計は -1・-10 からのマイナススタート）。
-- 最初の手番はディーラーの次の人（時計回り）。
+- 最初の手番は**ディーラー本人**（＝前ラウンドの負けた人。最初のラウンドでは最初のディーラー）。
 
 ---
 
@@ -194,7 +205,8 @@ DOUBLE は常に手番を終了させ、次の人の必要枚数を 2 にする�
 ## 6. 仮置きの決め事（定数・フラグで後から変えやすくする）
 
 - SHOT の指名対象は自分以外の生存プレイヤー（座席順に関係なく選べる）。
-- 初期ディーラーは座席0（`neu.engine.INITIAL_DEALER`）。
+- 初期ディーラーはランダムに1人（`neu.engine.INITIAL_DEALER = None`、未指定なら
+  状態の RNG（seed 再現用）で全員からシャッフルして選ぶ。`new_game(dealer=...)` で固定も可能）。
 - チップ初期枚数 3（`STARTING_CHIPS`）、手札枚数 3（`HAND_SIZE`）、
   101 の上限（`LOSING_LIMIT = 101`）。
 - これらの値は `neu/engine.py` 冒頭の定数に集約している。
@@ -227,24 +239,38 @@ GameState(
     direction,      # +1=時計回り（席番号増加）, -1=反時計回り
     dealer, current_player, cards_remaining,
     phase,          # "playing" | "game_over"
-    winner, round_number, events, rng,
+    winner, round_number, events, round_results, rng,
 )
 ```
+
+- `round_results: list[dict]`: ラウンド結果の構造化リスト。ラウンド負け（バースト・安全なカード無し）が起きるたび
+  `_lose_round` の中で1件追加する。内容: `round`(ラウンド番号), `loser`(席番号), `reason`（"bust" | "no_safe_card"）,
+  `card_id`(bust のときのみ。出したカードの id), `sum_after`(bust のときのみ。出した後の合計),
+  `chips_left`, `eliminated`, `game_over`, `winner`, `hand`(no_safe_card のときのみ。負けた人の手札を
+  `card_to_dict` と同じ形で。bust のとき None)。
 
 ### 公開関数・クラス一覧（`neu.engine`）
 
 | 名前 | 説明 |
 | --- | --- |
 | `build_deck()` | 58枚のデッキを生成して返す |
-| `new_game(num_players, seed=None)` | ゲームを初期化して `GameState` を返す（2〜7人） |
+| `new_game(num_players, seed=None, dealer=None)` | ゲームを初期化して `GameState` を返す（2〜7人）。`dealer` 未指定なら `INITIAL_DEALER`（None = ランダム）に従う |
 | `start_round(state)` | ラウンドを開始する（カード回収・配布・初期場札・手番決定） |
 | `legal_actions(state)` | 現在の手番の合法手 `list[Action]` を返す。終了時は空 |
+| `safe_actions(state)` | 現在の手番の「出したとしても合計が 101 を超えない」安全な合法手を返す |
 | `apply(state, action)` | 手を適用した**新しい** `GameState` を返す。不正手は例外 |
 | `view_for(state, seat)` | そのプレイヤー視点の公開情報 dict を返す |
 | `to_dict(state)` / `from_dict(data)` | JSON 互換 dict への変換・復元 |
 | `is_game_over(state)` / `winner(state)` | 終了判定・勝者 |
 | `next_alive(state, seat, direction)` | 指定方向で次の生存プレイヤーの席番号 |
 | `card_to_dict(card)` / `card_from_dict(data)` | カードの変換 |
+
+### 安全なカードの判定
+
+- 「合計が 101 を超えない」計算は `_projected_total(state, card)` に集約し、
+  バースト判定（`apply`）と安全な手の判定（`safe_actions`）の両方で使う（重複させない）。
+- 手番が決まった直後（ラウンド開始時・手番が移ったとき・DOUBLE 中の2枚目を出す前）に
+  `_check_no_safe_card` で安全な手が無いかを確認し、無ければ `reason="no_safe_card"` で負けとする。
 
 ### アクション
 
@@ -274,17 +300,19 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 105 テスト（エンジン・アダプタ・API 結合）。
+現在 121 テスト（エンジン・アダプタ・API 結合）。
 
 ### CLI
 
 ```bash
 python3 -m neu.cli --players 4 --seed 1
+python3 -m neu.cli --players 4 --seed 1 --dealer 2   # 最初のディーラーを固定する場合
 ```
 
 - 座席0が人間、他は合法手からランダムに選ぶ簡易 Bot。
 - 場の合計・手札・各人のチップ・直前の出来事を表示。
 - DOUBLE 中は残り枚数、101 を超える手は警告を表示する。
+- 最初の手番はディーラー本人（`--dealer` で指定可能、未指定ならランダム）。
 
 ---
 
@@ -327,6 +355,12 @@ python3 app.py --port 5000
 | `POST` | `/api/rooms/<id>/stream-ticket` | SSE 用の短命チケット |
 | `GET` | `/api/rooms/<id>/events` | SSE（変更通知） |
 
+- `lastRound` は構造化されたラウンド結果（`GameState.round_results` の最新件）から作る。
+  既存キー（`round`, `loserId`, `loserName`, `cardId`, `card`, `sumAfter`, `sum`, `chipsLeft`, `chips`,
+  `eliminated`, `alive`, `gameOver`, `winnerId`, `winnerName`, `nextRound`, `message`）に加え、
+  `reason`（"bust" | "no_safe_card"）と `revealedHand`（no_safe_card のときのみ、負けた人の手札）を持つ。
+  イベントログの `round_end` も構造化結果から作る（バースト・安全なカード無しを区別する）。
+
 認証は `X-Player-Token`（または `Authorization: Bearer`）。トークンは localStorage の
 `neu:<roomId>` に保存する。
 
@@ -339,6 +373,9 @@ python3 app.py --port 5000
 - DOUBLE 中の1枚目はサーバーが合法手から除外し、UI でも「1枚目に出せません」と表示する。
 - 手番が回ってきたらプロンプト・ページタイトル・（対応端末では）振動で通知。
 - ラウンド敗者が出たらトーストで「バースト／合計／残りチップ／脱落」を演出。
+  - バースト: 「◯◯さんが△△でバースト（合計▽▽）」。
+  - 安全なカード無し: 「◯◯さんは出せるカードがすべて101を超えるため負け」。
+    このとき `revealedHand`（負けた人の手札）を UI が使えるように見せる。
 - 他人の手札は枚数のみ。裏面は CSS で描画する（`back.png` は未提供）。
 - 画像が404でも CSS の仮カードで遊べる（`onerror` で画像を隠す）。
 - ゲーム終了時は勝者とチップ順位をオーバーレイ表示。
@@ -362,7 +399,11 @@ python3 app.py --port 5000
   - [x] `NeuGame` アダプタ・公開 view・構造化ログ・lastRound
   - [x] 部屋作成→参加→開始→ランダム対戦→終了の API 結合テスト
   - [x] スマホ縦画面の対戦 UI（2タップ操作・SHOT 指名・警告・結果表示）
-  - [x] 全 105 テスト通過
+  - [x] 全 121 テスト通過
+- [x] ルール修正（テストプレイで見つかった点）
+  - [x] 出せるカードがすべて 101 超えなら、カードを出さずにラウンド負け（`no_safe_card`）
+  - [x] 次のラウンドは負けた人（ディーラー）から開始（最初の手番 = ディーラー本人）
+  - [x] 最初のディーラーはランダム（`INITIAL_DEALER = None` / `new_game(dealer=...)`）
 - [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
 - [ ] フェーズ4: CPU 強化
 
