@@ -577,6 +577,13 @@ body.room {
 
 .pile h3,
 .hand-wrap h3,
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .log-wrap h3 {
   margin: 0 0 6px;
   color: var(--muted);
@@ -801,105 +808,6 @@ body.room {
   white-space: nowrap;
 }
 
-.action-panel {
-  position: sticky;
-  bottom: calc(8px + env(safe-area-inset-bottom));
-  z-index: 8;
-  margin-top: 12px;
-  padding: 12px;
-  background: rgba(12, 22, 40, 0.97);
-  border: 1px solid rgba(240, 201, 106, 0.5);
-  border-radius: 14px;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(10px);
-}
-
-.action-title {
-  margin: 0 0 8px;
-  font-size: 0.96rem;
-  font-weight: 800;
-}
-
-.action-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.fact {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #dce7f5;
-  font-size: 0.72rem;
-}
-
-.action-sub {
-  margin: 12px 0 6px;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.warning {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 9px;
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-
-.warning.danger {
-  background: rgba(255, 111, 97, 0.16);
-  border: 1px solid rgba(255, 111, 97, 0.45);
-  color: #ffd0ca;
-}
-
-.hint {
-  margin: 7px 0;
-  color: #ffd79a;
-  font-size: 0.76rem;
-}
-
-.target-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.target {
-  min-height: 44px;
-  padding: 7px 14px;
-  border-radius: 999px;
-  font-size: 0.84rem;
-}
-
-.target.selected {
-  background: var(--gold);
-  border-color: var(--gold);
-  color: #2a210b;
-  font-weight: 800;
-}
-
-.action-buttons {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.action-buttons .primary {
-  min-height: 52px;
-  font-size: 0.98rem;
-}
-
-.action-buttons .ghost {
-  min-height: 52px;
-}
-
-.log-wrap {
-  margin-top: 16px;
-}
-
 .log {
   margin: 0;
   padding: 0;
@@ -996,6 +904,30 @@ body.room {
   margin: 3px 0 0;
   color: #e8dcc7;
   font-size: 0.8rem;
+}
+
+.toast-hand {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.small-card {
+  position: relative;
+  width: 44px;
+  aspect-ratio: 5 / 7;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: var(--card-bg);
+}
+
+.small-card .card-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
 }
 
 /* ---------------- result ---------------- */
@@ -1157,10 +1089,6 @@ body.room {
     max-width: 560px;
     margin: 0 auto;
     gap: 12px;
-  }
-
-  .action-buttons {
-    grid-template-columns: 1fr minmax(120px, auto);
   }
 
   .log {

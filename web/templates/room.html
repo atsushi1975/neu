@@ -65,14 +65,10 @@
 
     <section id="players" class="players" aria-label="プレイヤー"></section>
 
-    <section class="field" aria-label="場札と捨て札">
+    <section class="field" aria-label="場札">
       <div class="pile">
         <h3>場札</h3>
-        <div id="field-card" class="pile-card"></div>
-      </div>
-      <div class="pile">
-        <h3>最後の捨て札</h3>
-        <div id="discard-card" class="pile-card"></div>
+        <div id="table-card" class="pile-card"></div>
       </div>
       <p id="deck-count" class="deck-count"></p>
     </section>
@@ -82,19 +78,14 @@
     <section class="hand-wrap">
       <h3>自分の手札 <span id="hand-count" class="muted"></span></h3>
       <div id="hand" class="hand"></div>
-      <p class="hand-help">カードをタップして選び、もう一度「出す」で確定します。</p>
+      <p id="hand-help" class="hand-help">カードをタップして出せます。</p>
     </section>
 
-    <div id="action-panel" class="action-panel" hidden>
-      <div id="action-body"></div>
-      <div class="action-buttons">
-        <button id="confirm-play" type="button" class="primary">出す</button>
-        <button id="cancel-play" type="button" class="ghost">キャンセル</button>
-      </div>
-    </div>
-
     <section class="log-wrap">
-      <h3>ログ</h3>
+      <div class="log-header">
+        <h3>ログ</h3>
+        <button id="log-toggle" type="button" class="ghost small">▾</button>
+      </div>
       <ol id="log" class="log"></ol>
     </section>
   </main>
@@ -102,6 +93,7 @@
   <div id="last-round-toast" class="toast" role="status" aria-live="assertive" hidden>
     <p id="toast-title" class="toast-title"></p>
     <p id="toast-body" class="toast-body"></p>
+    <div id="toast-hand" class="toast-hand"></div>
   </div>
 
   <div id="result-overlay" class="overlay" hidden>

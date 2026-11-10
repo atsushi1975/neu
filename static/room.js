@@ -22,20 +22,17 @@ const els = {
   summarySum: document.getElementById("summary-sum"),
   summaryNote: document.getElementById("summary-note"),
   players: document.getElementById("players"),
-  fieldCard: document.getElementById("field-card"),
-  discardCard: document.getElementById("discard-card"),
+  tableCard: document.getElementById("table-card"),
   deckCount: document.getElementById("deck-count"),
   prompt: document.getElementById("prompt"),
   hand: document.getElementById("hand"),
   handCount: document.getElementById("hand-count"),
-  actionPanel: document.getElementById("action-panel"),
-  actionBody: document.getElementById("action-body"),
-  confirmPlay: document.getElementById("confirm-play"),
-  cancelPlay: document.getElementById("cancel-play"),
   log: document.getElementById("log"),
+  logToggle: document.getElementById("log-toggle"),
   toast: document.getElementById("last-round-toast"),
   toastTitle: document.getElementById("toast-title"),
   toastBody: document.getElementById("toast-body"),
+  toastHand: document.getElementById("toast-hand"),
   resultOverlay: document.getElementById("result-overlay"),
   resultWinner: document.getElementById("result-winner"),
   resultMessage: document.getElementById("result-message"),
@@ -58,8 +55,9 @@ let session = readSession();
 let roomState = null;
 let youState = null;
 let gameState = null;
-let selectedCardId = null;
 let targetPlayerId = null;
+let shotNaming = false;
+let pendingShotCardId = null;
 let busy = false;
 let errorTimer = null;
 let eventSource = null;
@@ -67,6 +65,8 @@ let streamRetry = null;
 let toastTimer = null;
 let lastRoundKey = null;
 let wasMyTurn = false;
+let logCollapsed = false;
+let lastArrowDir = null;
 
 function readSession() {
   try {
@@ -123,6 +123,9 @@ function apply(data) {
   roomState = data.room;
   youState = data.you || youState;
   gameState = data.game;
+  if (gameState && shotNaming && !gameState.me.hand.some((card) => card.cardId === pendingShotCardId)) {
+    cancelShotNaming();
+  }
   els.error.textContent = "";
   els.joinPanel.hidden = true;
 
@@ -232,25 +235,11 @@ function makeCardFace(card) {
 }
 
 function renderGame() {
-  const me = gameState.me;
-
-  // 手札から消えたカード・出せなくなったカードの選択を解除する。
-  if (selectedCardId) {
-    const card = me.hand.find((entry) => entry.cardId === selectedCardId);
-    if (!card || !card.playable || !isMyTurn()) selectedCardId = null;
-  }
-  if (targetPlayerId) {
-    const card = currentCard();
-    const targets = card && Array.isArray(card.targets) ? card.targets : [];
-    if (!targets.includes(targetPlayerId)) targetPlayerId = null;
-  }
-
   renderSummary();
   renderPlayers();
   renderField();
   renderPrompt();
   renderHand();
-  renderActionPanel();
   renderLog();
   renderLastRound();
   renderResult();
@@ -265,7 +254,6 @@ function renderGame() {
 
 function renderSummary() {
   els.summarySum.textContent = String(gameState.sum);
-  els.summaryRound.textContent = `ラウンド ${gameState.round}`;
   els.summaryDirection.textContent =
     `${gameState.direction === -1 ? "↺" : "↻"} ${gameState.directionLabel || "時計回り"}`;
   els.summaryRemaining.textContent =
@@ -285,6 +273,7 @@ function renderSummary() {
     notes.push(`次は ${playerName(gameState.nextPlayerId)} さん`);
   }
   els.summaryNote.textContent = notes.join(" ／ ");
+  els.summaryRound.textContent = `ラウンド ${gameState.round}`;
 }
 
 function renderPlayers() {
@@ -335,10 +324,8 @@ function fillPile(container, card, emptyText) {
 }
 
 function renderField() {
-  fillPile(els.fieldCard, gameState.fieldCard, "なし");
-  fillPile(els.discardCard, gameState.discardTop, "まだありません");
-  els.deckCount.textContent =
-    `山札 ${gameState.deckCount}枚 ／ 捨て札 ${gameState.discardCount}枚`;
+  fillPile(els.tableCard, gameState.tableTop, "なし");
+  els.deckCount.textContent = `山札 ${gameState.deckCount}枚 ／ 場札 ${gameState.tableCount}枚`;
 }
 
 function renderPrompt() {
@@ -353,16 +340,19 @@ function renderPrompt() {
   }
 
   const myTurn = isMyTurn();
+  if (isShotNaming()) {
+    const shot = shotCard();
+    els.prompt.textContent = shot
+      ? `「${shot.label}」で、誰を次の手番にしますか？`
+      : "誰を次の手番にしますか？";
+    els.prompt.classList.add("action");
+    return;
+  }
+
   if (myTurn) {
-    const card = currentCard();
-    if (card) {
-      els.prompt.textContent =
-        `「${card.label}」を選択中です。もう一度「出す」を押すと確定します。`;
-    } else if (gameState.cardsRemaining >= 2) {
-      els.prompt.textContent = "あなたの番です（2枚出し）。手札を選んでください。";
-    } else {
-      els.prompt.textContent = "あなたの番です。手札を選んでください。";
-    }
+    els.prompt.textContent = gameState.cardsRemaining >= 2
+      ? "あなたの番です（2枚出し）。手札をタップして出してください。"
+      : "あなたの番です。手札をタップして出してください。";
     els.prompt.classList.add("action");
     return;
   }
@@ -380,15 +370,18 @@ function renderPrompt() {
 function handCardNote(card, myTurn) {
   if (!myTurn) return null;
   if (card.busts) {
-    return { text: `合計 ${card.afterSum}・101超え`, danger: true };
+    return { text: `超過 ${card.afterSum}`, danger: true };
   }
   if (card.kind === "number" || card.kind === "hundred") {
+    if (!card.playable) {
+      return { text: `出せない（合計 ${card.afterSum}）`, danger: false };
+    }
     return { text: `出すと合計 ${card.afterSum}`, danger: false };
   }
+  if (card.kind === "double" && gameState.cardsRemaining >= 2) {
+    return { text: "DOUBLE中は1枚目に出せません", danger: true };
+  }
   if (!card.playable) {
-    if (card.id === "double" && gameState.cardsRemaining >= 2) {
-      return { text: "DOUBLE中は1枚目に出せません", danger: true };
-    }
     return { text: "いまは出せません", danger: false };
   }
   return null;
@@ -407,9 +400,7 @@ function renderHand() {
 
   for (const card of hand) {
     const selectable = myTurn && card.playable;
-    const selected = selectedCardId === card.cardId;
     const classes = ["card", `card-kind-${card.kind}`, `card-${card.id}`];
-    if (selected) classes.push("selected");
     if (!selectable) classes.push("unplayable");
 
     const button = el("button", classes.join(" "));
@@ -427,12 +418,11 @@ function renderHand() {
         el("span", `card-note${note.danger ? " danger" : ""}`, note.text)
       );
     }
-    if (selected) {
-      button.append(el("span", "card-selected-mark", "選択中"));
-    }
 
     if (selectable) {
-      button.addEventListener("click", () => selectCard(card.cardId));
+      button.addEventListener("click", () => {
+        void handleCardTap(card);
+      });
     } else {
       button.disabled = true;
     }
@@ -440,118 +430,84 @@ function renderHand() {
   }
 }
 
-function currentCard() {
-  if (!selectedCardId || !gameState) return null;
-  return gameState.me.hand.find((card) => card.cardId === selectedCardId) || null;
+function shotCard() {
+  if (!pendingShotCardId || !gameState) return null;
+  return gameState.me.hand.find((card) => card.cardId === pendingShotCardId) || null;
 }
 
-function selectCard(cardId) {
-  selectedCardId = selectedCardId === cardId ? null : cardId;
+function isShotNaming() {
+  const card = shotCard();
+  return Boolean(shotNaming && card && card.kind === "shot");
+}
+
+function enterShotNaming(cardId) {
+  shotNaming = true;
+  pendingShotCardId = cardId;
   targetPlayerId = null;
   renderPrompt();
-  renderHand();
-  renderActionPanel();
-  scrollSelectedCardIntoView();
 }
 
-// スマホ縦画面では、手札の下に出す操作パネルが重なることがある。
-// 選択したカードがパネルに隠れる場合だけ、カードが見える位置までスクロールする。
-function scrollSelectedCardIntoView() {
-  if (els.actionPanel.hidden) return;
-  const card = els.hand.querySelector(".card.selected");
-  if (!card) return;
-  const cardRect = card.getBoundingClientRect();
-  const panelRect = els.actionPanel.getBoundingClientRect();
-  if (cardRect.bottom <= panelRect.top) return;
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  card.scrollIntoView({
-    block: "center",
-    behavior: reduceMotion ? "auto" : "smooth",
-  });
+function cancelShotNaming() {
+  shotNaming = false;
+  pendingShotCardId = null;
+  targetPlayerId = null;
+  renderPrompt();
 }
 
-function renderActionPanel() {
-  const card = currentCard();
-  if (!card || !isMyTurn()) {
-    els.actionPanel.hidden = true;
+async function handleCardTap(card) {
+  if (busy) return;
+  if (!isMyTurn()) return;
+  if (!card.playable) return;
+  if (isShotNaming()) {
+    // 指名モード中は、SHOT をもう一度タップでやめる。それ以外をタップしたら即出す。
+    if (card.kind === "shot") {
+      cancelShotNaming();
+      return;
+    }
+    await submitPlay(card.cardId, null);
     return;
   }
-
-  els.actionPanel.hidden = false;
-  els.actionBody.replaceChildren();
-  els.actionBody.append(el("p", "action-title", `「${card.label}」を出します。`));
-
-  const facts = el("div", "action-facts");
-  if (card.kind === "number" || card.kind === "hundred") {
-    facts.append(
-      el("span", "fact", `場の合計 ${gameState.sum} → ${card.afterSum}`)
-    );
-  }
-  if (card.description) {
-    facts.append(el("span", "fact", card.description));
-  }
-  els.actionBody.append(facts);
-
-  if (card.busts) {
-    els.actionBody.append(
-      el(
-        "p",
-        "warning danger",
-        `101 を超えます。このカードを出すと、このラウンドは ${gameState.me.name} さんの負けです。`
-      )
-    );
-  }
-
   if (card.kind === "shot") {
-    els.actionBody.append(el("p", "action-sub", "誰を次の手番にしますか？"));
-    const row = el("div", "target-row");
-    const targets = Array.isArray(card.targets) ? card.targets : [];
-    if (targets.length === 0) {
-      els.actionBody.append(el("p", "hint", "指名できるプレイヤーがいません。"));
-    }
-    for (const player of gameState.players) {
-      if (!targets.includes(player.id)) continue;
-      const button = el(
-        "button",
-        "target" + (targetPlayerId === player.id ? " selected" : ""),
-        player.name
-      );
-      button.type = "button";
-      button.addEventListener("click", () => {
-        targetPlayerId = player.id;
-        renderActionPanel();
-      });
-      row.append(button);
-    }
-    els.actionBody.append(row);
+    enterShotNaming(card.cardId);
+    return;
   }
+  await submitPlay(card.cardId, null);
+}
 
-  if (card.kind === "double") {
-    els.actionBody.append(
-      el("p", "hint", "次の手番の人は、カードを2枚続けて出します。")
-    );
-  }
-  if (card.kind === "turn") {
-    els.actionBody.append(el("p", "hint", "進む向きが反転します。"));
-  }
-  if (card.kind === "pass") {
-    els.actionBody.append(el("p", "hint", "合計は変わりません。"));
-  }
+async function submitPlay(cardId, target) {
+  if (busy) return;
+  busy = true;
+  const payload = {
+    type: "play",
+    cardId,
+    expectedRevision: gameState.revision,
+  };
+  if (target) payload.target = target;
 
-  const needsTarget = card.kind === "shot";
-  const ready = !busy && (!needsTarget || Boolean(targetPlayerId));
-  els.confirmPlay.disabled = !ready;
-  els.confirmPlay.textContent = card.busts
-    ? "101を超えて出す"
-    : needsTarget
-      ? "この人を指名して出す"
-      : "出す";
+  try {
+    const data = await request(`/api/rooms/${roomId}/actions`, {
+      method: "POST",
+      body: payload,
+    });
+    apply(data);
+  } catch (error) {
+    if (error.status === 409 && error.data && error.data.game) {
+      // 状態が古くなっていたら、最新の状態で再描画する。
+      apply({ room: roomState, you: youState, game: error.data.game });
+      showError("状態が更新されていたため、最新の状態で再読み込みしました。");
+    } else {
+      showError(error.message);
+    }
+  } finally {
+    busy = false;
+  }
 }
 
 function renderLog() {
   const previous = els.log.dataset.count ? Number(els.log.dataset.count) : 0;
   els.log.replaceChildren();
-  for (const event of gameState.events) {
+  const events = logCollapsed ? gameState.events.slice(-1) : gameState.events;
+  for (const event of events) {
     const item = el("li", `log-${event.kind}`);
     const icon = LOG_ICONS[event.kind] || LOG_ICONS.info;
     item.append(el("span", "log-icon", icon));
@@ -571,15 +527,20 @@ function renderLastRound() {
   const key = [
     lastRound.round,
     lastRound.loserId,
-    lastRound.sumAfter,
+    lastRound.sum,
     lastRound.chipsLeft,
     lastRound.gameOver,
   ].join(":");
   if (key === lastRoundKey) return;
   lastRoundKey = key;
 
-  els.toastTitle.textContent = `${lastRound.loserName} さんがバースト！`;
-  const bits = [`合計 ${lastRound.sumAfter}`, `チップ残り ${lastRound.chipsLeft}`];
+  els.toastTitle.textContent = `${lastRound.loserName} さんが${
+    lastRound.reason === "no_playable_card" ? "負け" : "バースト"
+  }！`;
+  const bits = [
+    `合計 ${lastRound.sumAfter ?? lastRound.sum}`,
+    `チップ残り ${lastRound.chipsLeft}`,
+  ];
   if (lastRound.eliminated) bits.push("脱落");
   if (lastRound.gameOver) bits.push("ゲーム終了");
   els.toastBody.textContent = bits.join(" ／ ");
@@ -639,52 +600,6 @@ function renderResult() {
   }
 
   els.resultOverlay.hidden = false;
-}
-
-/* ------------------------------------------------------------------ 操作 */
-
-async function playSelected() {
-  const card = currentCard();
-  if (!card || busy) return;
-  if (card.kind === "shot" && !targetPlayerId) {
-    showError("SHOT の指名先を選んでください。");
-    return;
-  }
-
-  const payload = {
-    type: "play",
-    cardId: card.cardId,
-    expectedRevision: gameState.revision,
-  };
-  if (card.kind === "shot") payload.target = targetPlayerId;
-
-  busy = true;
-  renderActionPanel();
-  try {
-    const data = await request(`/api/rooms/${roomId}/actions`, {
-      method: "POST",
-      body: payload,
-    });
-    selectedCardId = null;
-    targetPlayerId = null;
-    apply(data);
-  } catch (error) {
-    if (error.data && error.data.game) {
-      apply({ room: roomState, you: youState, game: error.data.game });
-    }
-    showError(error.message);
-  } finally {
-    busy = false;
-    if (gameState) renderActionPanel();
-  }
-}
-
-function cancelSelection() {
-  selectedCardId = null;
-  targetPlayerId = null;
-  renderPrompt();
-  renderHand();
-  renderActionPanel();
 }
 
 /* ------------------------------------------------------------------ 通信 */
@@ -837,8 +752,10 @@ els.takeHost.addEventListener("click", async () => {
   }
 });
 
-els.confirmPlay.addEventListener("click", playSelected);
-els.cancelPlay.addEventListener("click", cancelSelection);
+els.logToggle.addEventListener("click", () => {
+  logCollapsed = !logCollapsed;
+  renderLog();
+});
 
 els.copyRoom.addEventListener("click", async () => {
   try {
