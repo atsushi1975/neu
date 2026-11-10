@@ -364,19 +364,6 @@ class NeuGame:
         loser_id = self.player_id_at(loser_seat)
         loser_name = self.name_at(loser_seat)
         message = f"{loser_name} さんは出せるカードがすべて101を超えるため負け"
-        revealed_hand: list[dict[str, Any]] | None = None
-        if reason == "no_playable_card":
-            revealed_hand = [
-                card_to_view(
-                    Card(
-                        id=str(entry["id"]),
-                        kind=str(entry.get("kind") or "number"),
-                        value=int(entry.get("value") or 0),
-                        copy=int(entry.get("copy") or 1),
-                    )
-                )
-                for entry in (result.get("hand") or [])
-            ]
         return {
             "round": round_number,
             "loserId": loser_id,
@@ -411,7 +398,6 @@ class NeuGame:
             ),
             "message": message,
             "reason": reason,
-            "revealedHand": revealed_hand,
         }
 
 

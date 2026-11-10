@@ -628,9 +628,6 @@ def _lose_round(
     （``start_round``）で進む。他のプレイヤーの手札・山札・場札はそのまま引き継ぐ。
     """
     lost_round = state.round_number
-    lost_hand = (
-        [card_to_dict(c) for c in loser.hand] if reason == "no_playable_card" else None
-    )
     loser.chips -= 1
     if loser.chips <= 0:
         loser.chips = 0
@@ -671,7 +668,6 @@ def _lose_round(
             "eliminated": not loser.alive,
             "game_over": game_over,
             "winner": winner_seat if game_over else None,
-            "hand": lost_hand,
         }
     )
 
@@ -842,7 +838,13 @@ def from_dict(data: dict[str, Any]) -> GameState:
         round_number=int(data.get("round", 0)),
         events=list(data.get("events", [])),
         round_results=[
-            dict(result) for result in (data.get("round_results") or [])
+            # 旧形式の round_results（手札を含んでいた）も読み取れるように、hand は無視する。
+            {
+                key: value
+                for key, value in dict(result).items()
+                if key != "hand"
+            }
+            for result in (data.get("round_results") or [])
         ],
         rng=rng,
     )

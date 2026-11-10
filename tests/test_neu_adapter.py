@@ -290,28 +290,9 @@ class RoundEndTest(unittest.TestCase):
         self.assertEqual(last["reason"], "no_playable_card")
         self.assertIsNone(last["card"])
         self.assertEqual(last["nextRound"], {"round": 2, "firstPlayer": "p1", "sum": 0})
-        # no_playable_card ではカードを出していないが、負けた人の手札が見える。
-        self.assertEqual(len(last["revealedHand"]), 3)
-        self.assertEqual(game.state.round_results[-1]["hand"][0]["id"], "n50")
-
-    def test_no_playable_card_revealed_hand_is_the_losers_hand(self):
-        game = make_game(
-            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10")],
-            total=100,
-            current=0,
-            chips=[3, 3, 3],
-        )
-        game.act("p0", {"type": "play", "cardId": "pass#1"})
-        last = game.last_round
-        self.assertEqual(last["reason"], "no_playable_card")
-        revealed = last["revealedHand"]
-        self.assertEqual(len(revealed), 3)
-        self.assertEqual(revealed[0]["id"], "n50")
-        self.assertEqual(revealed[0]["cardId"], "n50#1")
-        self.assertEqual(revealed[0]["kind"], "number")
-        self.assertEqual(revealed[0]["value"], 50)
-        self.assertEqual(revealed[1]["id"], "n50")
-        self.assertEqual(revealed[2]["id"], "n10")
+        # 手札の公開は廃止したため、ラウンド結果に手札は含まれない。
+        self.assertNotIn("hand", game.state.round_results[-1])
+        self.assertNotIn("revealedHand", last)
 
     def test_game_over_phase_and_winner(self):
         game = make_game(

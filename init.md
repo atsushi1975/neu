@@ -254,8 +254,8 @@ GameState(
 - `round_results: list[dict]`: ラウンド結果の構造化リスト。ラウンド負け（`no_playable_card`）が起きるたび
   `_lose_round` の中で1件追加する。内容: `round`(ラウンド番号), `loser`(席番号), `reason`（`"no_playable_card"`）,
   `card_id`（負けても出したカードはないので常に None）, `sum_after`（常に None）,
-  `sum`（負けた時点の合計。リセット前）, `chips_left`, `eliminated`, `game_over`, `winner`,
-  `hand`（`no_playable_card` のときのみ。負けた人の手札を `card_to_dict` と同じ形で）。
+  `sum`（負けた時点の合計。リセット前）, `chips_left`, `eliminated`, `game_over`, `winner`。
+  負けた人の手札は含めない（`from_dict` は旧データの `hand` キーを無視して読む）。
 
 ### 公開関数・クラス一覧（`neu.engine`）
 
@@ -367,7 +367,7 @@ python3 app.py --port 5001
 - `lastRound` は構造化されたラウンド結果（`GameState.round_results` の最新件）から作る。
   既存キー（`round`, `loserId`, `loserName`, `cardId`, `card`, `sumAfter`, `sum`, `chipsLeft`, `chips`,
   `eliminated`, `alive`, `gameOver`, `winnerId`, `winnerName`, `nextRound`, `message`）に加え、
-  `reason`（`"no_playable_card"`）と `revealedHand`（no_playable_card のときのみ、負けた人の手札）を持つ。
+  `reason`（`"no_playable_card"`）を持つ。負けた人の手札（旧 `revealedHand`）は返さない。
   イベントログの `round_end` も構造化結果から作る。
 
 認証は `X-Player-Token`（または `Authorization: Bearer`）。トークンは localStorage の
@@ -375,18 +375,29 @@ python3 app.py --port 5001
 
 ### UI（スマホ縦画面優先）
 
-- 場の合計を特大表示。ラウンドは上部の細いヘッダ（summary）に表示。向き・残り枚数・山札/場札・場札の枚数を表示。
-- 手札は3枚を横並び（`min(26vw, 108px)`）。自分の手番で `playable` なカードをタップするとその場で出す（即出し）。アクションパネル（「出す」ボタン）は廃止した。
-- 各カードに「出すと合計 XX」（`afterSum`）を表示。101 超え（`busts`）は赤い「超過」バッジを表示。
+- 画面に出すもの（対戦中）は次のとおり。それ以外の要素は足さない。
+  - ヘッダ: 「ノイ」・ルームID・コピー・退出・ラウンド番号（ラウンド番号はここ1か所だけ）。
+  - 楕円の卓: 各席は名前（長いときは省略）・チップ数・親の印・手番ハイライト・DOUBLE 中の手番の人だけ「あとN枚」。
+    自分は下中央、他は席番号の増加＝画面上の時計回りに等間隔。脱落者は席を残して暗くする。
+  - 回る向きは「↻ 時計回り」「↺ 反時計回り」の文字1か所だけ（ステータス帯）。矢印の図形・回転アニメーションは作らない。
+  - 場の合計は卓の中央に1か所だけ（`gameState.sum` をそのまま常時更新）。
+  - 場札は一番上の1枚だけを傾けず重ねずに表示し、下に「場札 N枚」。空のときは「なし」。
+  - 山札は裏面1枚と「山札 N枚」。
+  - 手番の案内は1行。
+  - 自分の手札はカード画像。出せるカードは「出すと合計 XX」（`afterSum`）、101 超え（`busts`）は赤い「超過」バッジ。
+  - ログは折りたたみ（既定は閉じる）。
+  - ラウンド結果トーストは `lastRound.message` とチップ残り・脱落・次の最初の手番を1行で（手札は出さない）。
+  - ゲーム終了時は勝者とチップ順位をオーバーレイ表示。
+- 対戦中は `body.in-game` で `100dvh` の縦 flex にし、390×844 と 360×640 で縦スクロールなしに収める。
+- 席は `static/table-layout.js` の `seatPosition(seat, mySeat, seatCount, {radiusX, radiusY, centerX, centerY})` で配置する。
+  席の実寸を測って半径を決めるので、席が卓の枠からはみ出さない。`ResizeObserver` でサイズ変化時に再配置する。
+- 手札は3枚を横並び。自分の手番で `playable` なカードをタップするとその場で出す（即出し）。アクションパネル（「出す」ボタン）は廃止した。
 - SHOT は、手札の SHOT をタップしてから、円形卓上で `targets` に該当する席をタップして出す。
 - DOUBLE 中の1枚目はサーバーが合法手から除外し、UI でも「1枚目に出せません」と表示する。
 - 手番が回ってきたらプロンプト・ページタイトル・（対応端末では）振動で通知。
-- ラウンド敗者はサーバーの `lastRound.message` をそのままトースト表示。
-  - no_playable_card: 「◯◯さんは出せるカードがすべて101を超えるため負け」。
-    このとき `revealedHand`（負けた人の手札）を、小さめのカード（場札と同じ幅）で並べて見せる。
-- 他人の手札は枚数のみ。裏面は CSS で描画する（`back.png` は未提供）。
+- ラウンド敗者はサーバーの `lastRound.message` をそのままトースト表示（負けた人の手札は表示しない）。
+- 他人の手札の中身・枚数は表示しない。山札の裏面は CSS で描画する（`back.png` は未提供）。
 - 画像が404でも CSS の仮カードで遊べる（`onerror` で画像を隠す）。
-- ゲーム終了時は勝者とチップ順位をオーバーレイ表示。
 
 ### 未対応（フェーズ3以降）
 
@@ -412,9 +423,18 @@ python3 app.py --port 5001
   - [x] 即出し（2タップ確認・「出す」ボタン・アクションパネル削除）
   - [x] 円形卓（`static/table-layout.js` の座標計算・回る向きの矢印・場札の山表示）
   - [x] SHOT 指名の卓タップ化
-  - [x] ラウンド結果ダイアログ（サーバー `lastRound.message` をそのまま表示・`revealedHand` を小さめで表示）
+  - [x] ラウンド結果ダイアログ（サーバー `lastRound.message` をそのまま表示・手札は表示しない）
   - [x] 標準ポート 5001 / ヘルスチェック 5002 / カード表示サイズ調整
   - [x] node で円形卓の座標計算テスト追加（`static/table-layout.test.js`）
+- [x] 対戦画面の修復・整理（2026-11）
+  - [x] 席が全員重なる不具合を修正（`seatPosition` の呼び出し引数・実寸から半径を計算・`ResizeObserver` で再配置）
+  - [x] 山札の枚数が消える不具合を修正（描画関数が枚数の要素を壊さないように）
+  - [x] 場の合計を卓の中央1か所に統一・ラウンド番号をヘッダ1か所に統一・向きはステータス帯の文字1か所
+  - [x] 余計な要素の削除（他人の手札枚数・ミニ裏面列・自分の手札枚数・リング矢印・上の合計枠・捨て札表示）
+  - [x] 場札を一番上の1枚だけ表示（傾けず重ねない）
+  - [x] 390×844 / 360×640 で縦スクロールなしに収める
+  - [x] サーバーから負けた人の手札公開（`revealedHand` / `round_results[].hand`）を削除
+  - [x] Playwright の手動検証スクリプト `tests/ui_check.py`（unittest 対象外）
 - [x] ルール修正（テストプレイで見つかった点）
   - [x] 出せるカードがすべて 101 超えなら、カードを出さずにラウンド負け（`no_playable_card`）
   - [x] 次のラウンドは負けた人（ディーラー）から開始（最初の手番 = ディーラー本人）
