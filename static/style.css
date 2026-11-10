@@ -108,7 +108,7 @@ a {
   z-index: 30;
   margin: 0;
   padding: 0 4px;
-  min-height: 1.2em;
+  min-height: 0;
   color: var(--danger-soft);
   font-size: 0.82rem;
   text-shadow: 0 1px 6px #000;
@@ -377,71 +377,6 @@ body.room {
   margin: 12px auto 0;
 }
 
-.summary {
-  position: relative;
-  padding: 12px 14px 14px;
-  text-align: center;
-  background:
-    radial-gradient(circle at 50% 20%, rgba(240, 201, 106, 0.16), transparent 58%),
-    linear-gradient(180deg, rgba(23, 43, 73, 0.96), rgba(10, 18, 33, 0.98));
-  border: 1px solid rgba(240, 201, 106, 0.28);
-  border-radius: 18px;
-  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.3);
-}
-
-.summary-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.summary-chip {
-  padding: 3px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--muted);
-  font-size: 0.7rem;
-  white-space: nowrap;
-}
-
-.summary-chip.double {
-  border-color: rgba(255, 111, 97, 0.5);
-  background: rgba(255, 111, 97, 0.14);
-  color: var(--danger-soft);
-  font-weight: 700;
-}
-
-.summary-label {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 0.7rem;
-  letter-spacing: 0.22em;
-}
-
-.summary-sum {
-  margin: 0;
-  color: var(--gold-soft);
-  font-size: clamp(3.4rem, 21vw, 6.2rem);
-  font-weight: 900;
-  line-height: 0.98;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-}
-
-.summary-sum.near-limit {
-  color: #ffb35c;
-  text-shadow: 0 0 22px rgba(255, 140, 60, 0.4);
-}
-
-.summary-note {
-  min-height: 1.2em;
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 0.74rem;
-}
-
 .player {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -515,32 +450,6 @@ body.room {
   vertical-align: -1px;
 }
 
-.mini-hand {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  min-height: 15px;
-}
-
-.mini-card {
-  width: 8px;
-  height: 12px;
-  border-radius: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  background: repeating-linear-gradient(
-    45deg,
-    #31436b 0 3px,
-    #192542 3px 6px
-  );
-}
-
-.mini-count {
-  margin-left: 3px;
-  color: var(--muted);
-  font-size: 0.62rem;
-}
-
 .player-tag {
   display: inline-block;
   margin-top: 1px;
@@ -561,10 +470,6 @@ body.room {
   font-weight: 800;
 }
 
-.player-tag.out {
-  background: rgba(255, 111, 97, 0.18);
-  color: var(--danger-soft);
-}
 
 .player.dimmed {
   opacity: 0.35;
@@ -580,8 +485,8 @@ body.room {
 .table {
   position: relative;
   width: min(92vw, 360px);
-  height: min(40vh, 300px);
-  min-height: 150px;
+  height: min(34vh, 280px);
+  min-height: 140px;
   margin: 2px auto 0;
 }
 
@@ -597,9 +502,17 @@ body.room {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   pointer-events: none;
   z-index: 2;
+}
+
+/* 場札と山札は横に並べる（縦に積むと席と重なりやすいため）。 */
+.table-piles {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
 }
 
 .table-sum {
@@ -647,55 +560,6 @@ body.room {
   border: 2px solid rgba(255, 255, 255, 0.35);
 }
 
-/* 回る向きの円形矢印 */
-
-.turn-arrow {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 5;
-}
-
-.turn-arc {
-  width: 46%;
-  height: 46%;
-}
-
-.turn-track {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.22);
-  stroke-width: 6;
-}
-
-.turn-hand {
-  fill: none;
-  stroke: var(--gold);
-  stroke-width: 6;
-  stroke-linecap: round;
-  transform-box: view-box;
-  transform-origin: center;
-}
-
-.turn-hand.turn-anim {
-  animation: turn-spin 8s linear infinite;
-}
-
-.turn-arrow.reverse .turn-hand {
-  animation-direction: reverse;
-}
-
-@keyframes turn-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .naming-bar {
   display: flex;
   justify-content: center;
@@ -733,14 +597,6 @@ body.room {
   aspect-ratio: 5 / 7;
 }
 
-.pile-label {
-  overflow: hidden;
-  color: var(--gold-soft);
-  font-size: 0.9rem;
-  font-weight: 800;
-  text-overflow: ellipsis;
-}
-
 .pile-empty {
   margin: 0;
   color: rgba(255, 255, 255, 0.32);
@@ -748,20 +604,50 @@ body.room {
 }
 
 .deck-count {
-  grid-column: 1 / -1;
   margin: 0;
   color: var(--muted);
   font-size: 0.68rem;
   text-align: right;
 }
 
+/* 回る向きのステータス帯（↻ / ↺ と DOUBLE の「あと N 枚」を1行に出す） */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 6px 0 0;
+  padding: 4px 8px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.status-bar #status-direction {
+  color: var(--gold-soft);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.status-bar #status-double {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 111, 97, 0.14);
+  color: var(--danger-soft);
+  font-weight: 700;
+}
+
 .prompt {
-  margin: 10px 0;
-  padding: 11px 13px;
+  margin: 6px 0;
+  padding: 8px 12px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.24);
-  font-size: 0.88rem;
+  font-size: 0.84rem;
 }
 
 .prompt.action {
@@ -775,7 +661,7 @@ body.room {
 }
 
 .hand-wrap {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .hand {
@@ -1033,30 +919,6 @@ body.room {
   font-size: 0.8rem;
 }
 
-.toast-hand {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.small-card {
-  position: relative;
-  width: 44px;
-  aspect-ratio: 5 / 7;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: var(--card-bg);
-}
-
-.small-card .card-face {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-}
-
 /* ---------------- result ---------------- */
 
 .overlay {
@@ -1188,10 +1050,6 @@ body.room {
     margin: 0 -24px;
     padding-right: 24px;
     padding-left: 24px;
-  }
-
-  .summary-sum {
-    font-size: 5.4rem;
   }
 
   .table {

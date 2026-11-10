@@ -16,22 +16,18 @@ const els = {
   startWrap: document.getElementById("start-wrap"),
   takeHost: document.getElementById("take-host"),
   gamePanel: document.getElementById("game-panel"),
-  summaryRound: document.getElementById("summary-round"),
-  summaryDirection: document.getElementById("summary-direction"),
-  summaryRemaining: document.getElementById("summary-remaining"),
-  summarySum: document.getElementById("summary-sum"),
-  summaryNote: document.getElementById("summary-note"),
   roundIndicator: document.getElementById("round-indicator"),
   players: document.getElementById("players"),
   tableSum: document.getElementById("table-sum"),
   tableCard: document.getElementById("table-card"),
   tableCount: document.getElementById("table-count"),
   tableDeck: document.getElementById("table-deck"),
-  turnArrow: document.getElementById("turn-arrow"),
+  statusBar: document.getElementById("status-bar"),
+  statusDirection: document.getElementById("status-direction"),
+  statusDouble: document.getElementById("status-double"),
   deckCount: document.getElementById("deck-count"),
   prompt: document.getElementById("prompt"),
   hand: document.getElementById("hand"),
-  handCount: document.getElementById("hand-count"),
   handHelp: document.getElementById("hand-help"),
   cancelShot: document.getElementById("cancel-shot"),
   log: document.getElementById("log"),
@@ -39,7 +35,6 @@ const els = {
   toast: document.getElementById("last-round-toast"),
   toastTitle: document.getElementById("toast-title"),
   toastBody: document.getElementById("toast-body"),
-  toastHand: document.getElementById("toast-hand"),
   resultOverlay: document.getElementById("result-overlay"),
   resultWinner: document.getElementById("result-winner"),
   resultMessage: document.getElementById("result-message"),
@@ -73,7 +68,6 @@ let toastTimer = null;
 let lastRoundKey = null;
 let wasMyTurn = false;
 let logCollapsed = true;
-let lastArrowDir = null;
 let playersRenderRetryTimer = null;
 let playersSizeObserver = null;
 let lastPlayersSize = "";
@@ -245,7 +239,7 @@ function makeCardFace(card) {
 }
 
 function renderGame() {
-  renderSummary();
+  renderStatus();
   renderPlayers();
   renderField();
   renderPrompt();
@@ -253,7 +247,6 @@ function renderGame() {
   renderLog();
   renderLastRound();
   renderResult();
-  renderTurnArrow();
 
   const myTurn = isMyTurn();
   if (myTurn && !wasMyTurn && navigator.vibrate) {
@@ -263,28 +256,15 @@ function renderGame() {
   setDocumentTitle(myTurn);
 }
 
-function renderSummary() {
-  els.summarySum.textContent = String(gameState.sum);
-  els.summaryDirection.textContent =
+function renderStatus() {
+  // ラウンド番号はヘッダの1か所だけに出す。
+  els.roundIndicator.textContent = `ラウンド ${gameState.round}`;
+  // 回る向きはステータス帯に「1か所」だけ出す（卓の近くの細い帯）。
+  els.statusDirection.textContent =
     `${gameState.direction === -1 ? "↺" : "↻"} ${gameState.directionLabel || "時計回り"}`;
-  els.summaryRemaining.textContent =
-    gameState.cardsRemaining >= 2 ? "2枚出し" : "1枚";
-  els.summaryRemaining.classList.toggle("double", gameState.cardsRemaining >= 2);
-
-  const nearLimit = gameState.sum >= 80;
-  els.summarySum.classList.toggle("near-limit", nearLimit);
-
-  const notes = [];
-  if (gameState.phase === "finished") {
-    notes.push("ゲーム終了");
-  } else if (gameState.cardsRemaining >= 2) {
-    notes.push("DOUBLE の効果で、手番の人は2枚出します");
-  }
-  if (gameState.nextPlayerId) {
-    notes.push(`次は ${playerName(gameState.nextPlayerId)} さん`);
-  }
-  els.summaryNote.textContent = notes.join(" ／ ");
-  if (els.roundIndicator) els.roundIndicator.textContent = `ラウンド ${gameState.round}`;
+  const double = gameState.cardsRemaining >= 2;
+  els.statusDouble.textContent = `あと${gameState.cardsRemaining}枚`;
+  els.statusDouble.hidden = !double;
 }
 
 function renderPlayers() {
@@ -328,23 +308,12 @@ function renderPlayers() {
     chips.append(el("span", "", ` ${player.chips}`));
     tile.append(chips);
 
-    const backs = el("div", "mini-hand");
-    const count = Math.max(0, Number(player.handCount) || 0);
-    for (let index = 0; index < count; index += 1) {
-      backs.append(el("span", "mini-card"));
+    // DOUBLE 中の手番の人だけ「あと N 枚」を出す。
+    if (player.isCurrent && gameState.phase !== "finished" && gameState.cardsRemaining >= 2) {
+      tile.append(
+        el("span", "player-tag turn double", `あと${gameState.cardsRemaining}枚`)
+      );
     }
-    backs.append(el("span", "mini-count", `${count}枚`));
-    tile.append(backs);
-
-    const isTurn = player.isCurrent && gameState.phase !== "finished";
-    if (isTurn) {
-      if (gameState.cardsRemaining >= 2) {
-        tile.append(el("span", "player-tag turn double", `あと${gameState.cardsRemaining}枚`));
-      } else {
-        tile.append(el("span", "player-tag turn", "手番"));
-      }
-    }
-    if (!player.alive) tile.append(el("span", "player-tag out", "脱落"));
 
     container.append(tile);
     tiles.push({ player, tile });
@@ -400,28 +369,22 @@ function observePlayersSize() {
 }
 
 function fillPile(container, card, count, emptyText) {
+  // 場札は「一番上の1枚だけ」を、傾けず・重ねず・表向きで出す。
   container.replaceChildren();
   if (!card) {
     container.append(el("p", "pile-empty", emptyText));
     return;
   }
-  const face = makeCardFace(card);
-  const copies = Math.min(2, Math.max(0, Number(count) - 1));
-  for (let index = 0; index < copies; index += 1) {
-    const clone = face.cloneNode(true);
-    clone.classList.add("pile-under");
-    clone.style.transform = `translate(${index === 0 ? -3 : 3}px, ${
-      index * 3
-    }px) rotate(${index === 0 ? -6 : 6}deg)`;
-    container.append(clone);
-  }
-  container.append(face);
-  container.append(el("span", "pile-label", card.label || card.id));
+  container.append(makeCardFace(card));
 }
 
 function fillDeck(container) {
-  container.replaceChildren();
-  container.append(el("div", "deck-back"));
+  // 山札は裏面1枚。枠（.pile）の中身を丸ごと入れ替えると、兄弟の「山札 N枚」
+  // テキスト（#deck-count）ごと消えてしまうため、カード要素だけを（再）用意する。
+  const back = container.querySelector(".deck-back");
+  if (!back) {
+    container.append(el("div", "deck-back"));
+  }
 }
 
 function renderField() {
@@ -429,6 +392,8 @@ function renderField() {
   els.tableCount.textContent = `場札 ${gameState.tableCount}枚`;
   fillDeck(els.tableDeck);
   els.deckCount.textContent = `山札 ${gameState.deckCount}枚`;
+  els.tableSum.textContent = String(gameState.sum);
+  els.tableSum.classList.toggle("near-limit", gameState.sum >= 80);
 }
 
 function renderPrompt() {
@@ -496,7 +461,6 @@ function renderHand() {
   const hand = gameState.me.hand;
   const myTurn = isMyTurn();
   els.hand.replaceChildren();
-  els.handCount.textContent = `(${hand.length}枚)`;
 
   if (hand.length === 0) {
     els.hand.append(el("p", "muted", "手札がありません。"));
@@ -632,18 +596,6 @@ function hideToast() {
   }, 250);
 }
 
-function renderToastHand(revealed) {
-  const box = els.toastHand;
-  if (!box) return;
-  box.replaceChildren();
-  const cards = Array.isArray(revealed) ? revealed : [];
-  for (const entry of cards) {
-    const cardEl = el("div", `small-card card-kind-${entry.kind} card-${entry.id}`);
-    cardEl.append(makeCardFace(entry));
-    box.append(cardEl);
-  }
-}
-
 function renderLastRound() {
   const lastRound = gameState.lastRound;
   if (!lastRound) return;
@@ -663,8 +615,6 @@ function renderLastRound() {
 
   els.toastTitle.textContent = lastRound.message || "";
   const bits = [];
-  const sumValue = lastRound.sumAfter ?? lastRound.sum;
-  if (sumValue !== null && sumValue !== undefined) bits.push(`合計 ${sumValue}`);
   if (lastRound.chipsLeft !== null && lastRound.chipsLeft !== undefined) {
     bits.push(`チップ残り ${lastRound.chipsLeft}`);
   }
@@ -679,7 +629,6 @@ function renderLastRound() {
   // いったん reflow してアニメーションをやり直す。
   void els.toast.offsetWidth;
   els.toast.classList.add("show");
-  renderToastHand(lastRound.revealedHand);
 
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
@@ -727,20 +676,6 @@ function renderResult() {
   }
 
   els.resultOverlay.hidden = false;
-}
-
-function renderTurnArrow() {
-  const arrow = els.turnArrow;
-  if (!arrow) return;
-  const arc = arrow.querySelector(".turn-hand") || arrow;
-  const direction = gameState.direction;
-  arc.classList.toggle("reverse", direction === -1);
-  if (lastArrowDir !== direction) {
-    lastArrowDir = direction;
-    arc.classList.remove("turn-anim");
-    void arc.offsetWidth;
-    arc.classList.add("turn-anim");
-  }
 }
 
 /* ------------------------------------------------------------------ 通信 */

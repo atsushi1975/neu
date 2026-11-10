@@ -53,45 +53,32 @@
   </main>
 
   <main id="game-panel" hidden>
-    <section class="summary" aria-label="場の状況">
-      <div class="summary-top">
-        <span id="summary-round" class="summary-chip">ラウンド 1</span>
-        <span id="summary-direction" class="summary-chip">↻ 時計回り</span>
-        <span id="summary-remaining" class="summary-chip">1枚</span>
-      </div>
-      <p class="summary-label">場の合計</p>
-      <p id="summary-sum" class="summary-sum">0</p>
-      <p id="summary-note" class="summary-note"></p>
-    </section>
-
-    <section id="table" class="table" aria-label="プレイヤー">
+    <section id="table" class="table" aria-label="卓">
       <div id="table-center" class="table-center">
         <p id="table-sum" class="table-sum">0</p>
-        <div id="table-pile" class="pile">
-          <div id="table-card" class="pile-card"></div>
-          <p id="table-count" class="pile-count"></p>
-        </div>
-        <div id="table-deck" class="pile">
-          <div class="deck-back"></div>
-          <p id="deck-count" class="deck-count"></p>
+        <div class="table-piles">
+          <div id="table-pile" class="pile">
+            <div id="table-card" class="pile-card"></div>
+            <p id="table-count" class="pile-count"></p>
+          </div>
+          <div id="table-deck" class="pile">
+            <div class="deck-back"></div>
+            <p id="deck-count" class="deck-count"></p>
+          </div>
         </div>
       </div>
       <div id="players" class="table-seats" aria-label="プレイヤー"></div>
-      <div id="turn-arrow" class="turn-arrow" aria-hidden="true">
-        <svg id="turn-arc" class="turn-arc" viewBox="0 0 120 120">
-          <circle class="turn-track" cx="60" cy="60" r="40"></circle>
-          <g class="turn-hand">
-            <line x1="60" y1="60" x2="60" y2="22"></line>
-            <path d="M60,22 L50,38 L70,38 Z"></path>
-          </g>
-        </svg>
-      </div>
     </section>
+
+    <div id="status-bar" class="status-bar" aria-live="polite">
+      <span id="status-direction">↻ 時計回り</span>
+      <span id="status-double" class="status-double" hidden>あと2枚</span>
+    </div>
 
     <div id="prompt" class="prompt" role="status" aria-live="polite"></div>
 
     <section class="hand-wrap">
-      <h3>自分の手札 <span id="hand-count" class="muted"></span></h3>
+      <h3>自分の手札</h3>
       <div id="hand" class="hand"></div>
       <p id="hand-help" class="hand-help">カードをタップして出せます。</p>
       <div id="cancel-shot-wrap" class="naming-bar" hidden>
@@ -111,7 +98,6 @@
   <div id="last-round-toast" class="toast" role="status" aria-live="assertive" hidden>
     <p id="toast-title" class="toast-title"></p>
     <p id="toast-body" class="toast-body"></p>
-    <div id="toast-hand" class="toast-hand"></div>
   </div>
 
   <div id="result-overlay" class="overlay" hidden>
