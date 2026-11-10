@@ -30,6 +30,7 @@ const els = {
   hand: document.getElementById("hand"),
   handHelp: document.getElementById("hand-help"),
   cancelShot: document.getElementById("cancel-shot"),
+  cancelShotWrap: document.getElementById("cancel-shot-wrap"),
   log: document.getElementById("log"),
   logToggle: document.getElementById("log-toggle"),
   toast: document.getElementById("last-round-toast"),
@@ -71,6 +72,10 @@ let logCollapsed = true;
 let playersRenderRetryTimer = null;
 let playersSizeObserver = null;
 let lastPlayersSize = "";
+let renderQueued = false;
+let pointerActiveCount = 0;
+let touchActiveCount = 0;
+let lastRenderKey = null;
 
 function readSession() {
   try {
@@ -123,6 +128,19 @@ async function request(path, { method = "GET", body } = {}) {
   return data;
 }
 
+function isInteracting() {
+  return pointerActiveCount > 0 || touchActiveCount > 0;
+}
+
+function uiStateKey() {
+  return `${shotNaming ? 1 : 0}|${pendingShotCardId || ""}|${targetPlayerId || ""}|${window.innerWidth}x${window.innerHeight}`;
+}
+
+function currentRenderKey() {
+  if (!gameState) return null;
+  return `${gameState.revision}|${uiStateKey()}`;
+}
+
 function apply(data) {
   roomState = data.room;
   youState = data.you || youState;
@@ -140,6 +158,7 @@ function apply(data) {
     document.body.classList.remove("in-game");
     setDocumentTitle(false);
     renderLobby();
+    lastRenderKey = null;
   } else {
     els.lobbyPanel.hidden = true;
     els.gamePanel.hidden = false;
@@ -241,7 +260,19 @@ function makeCardFace(card) {
   return face;
 }
 
-function renderGame() {
+function renderGame(force = false) {
+  if (!force) {
+    const key = currentRenderKey();
+    if (key !== null && key === lastRenderKey) {
+      // revision と UI 状態が前回描画時と同じなら、席を含む描画を省略する。
+      return;
+    }
+  }
+  if (isInteracting()) {
+    // 押している最中は DOM を作り直さず、離したあとにまとめて描画する。
+    renderQueued = true;
+    return;
+  }
   renderStatus();
   renderPlayers();
   renderField();
@@ -257,6 +288,7 @@ function renderGame() {
   }
   wasMyTurn = myTurn;
   setDocumentTitle(myTurn);
+  lastRenderKey = currentRenderKey();
 }
 
 function renderStatus() {
@@ -418,10 +450,12 @@ function renderPrompt() {
       : "誰を次の手番にしますか？";
     els.prompt.classList.add("action");
     if (els.cancelShot) els.cancelShot.hidden = false;
+    if (els.cancelShotWrap) els.cancelShotWrap.hidden = false;
     return;
   }
 
   if (els.cancelShot) els.cancelShot.hidden = true;
+  if (els.cancelShotWrap) els.cancelShotWrap.hidden = true;
   if (myTurn) {
     els.prompt.textContent = gameState.cardsRemaining >= 2
       ? "あなたの番です（2枚出し）。手札をタップして出してください。"
@@ -517,6 +551,9 @@ function enterShotNaming(cardId) {
   pendingShotCardId = cardId;
   targetPlayerId = null;
   renderPrompt();
+  renderPlayers();
+  renderHand();
+  lastRenderKey = currentRenderKey();
 }
 
 function cancelShotNaming() {
@@ -524,6 +561,9 @@ function cancelShotNaming() {
   pendingShotCardId = null;
   targetPlayerId = null;
   renderPrompt();
+  renderPlayers();
+  renderHand();
+  lastRenderKey = currentRenderKey();
 }
 
 async function handleCardTap(card) {
@@ -856,7 +896,9 @@ els.players.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
   const tile = target ? target.closest(".player") : null;
   const seatId = tile ? tile.dataset.playerId : null;
-  if (tile && tile.classList.contains("targetable")) {
+  const card = shotCard();
+  const targets = card ? card.targets || [] : [];
+  if (tile && seatId && targets.includes(seatId)) {
     void submitPlay(pendingShotCardId, seatId);
     return;
   }
@@ -874,6 +916,54 @@ els.copyRoom.addEventListener("click", async () => {
     window.prompt("このルーム ID を共有してください。", roomId);
   }
 });
+
+// 押している最中の再描画を遅らせるため、ポインタ/タッチの状態を追跡する。
+function flushQueuedRender() {
+  if (isInteracting() || !renderQueued) return;
+  renderQueued = false;
+  window.setTimeout(() => {
+    if (isInteracting()) {
+      renderQueued = true;
+      return;
+    }
+    renderGame(true);
+  }, 0);
+}
+
+document.addEventListener("pointerdown", () => {
+  pointerActiveCount += 1;
+}, true);
+document.addEventListener("pointerup", () => {
+  if (pointerActiveCount > 0) pointerActiveCount -= 1;
+  flushQueuedRender();
+}, true);
+document.addEventListener("pointercancel", () => {
+  if (pointerActiveCount > 0) pointerActiveCount -= 1;
+  flushQueuedRender();
+}, true);
+document.addEventListener(
+  "touchstart",
+  () => {
+    touchActiveCount += 1;
+  },
+  { capture: true, passive: true }
+);
+document.addEventListener(
+  "touchend",
+  () => {
+    if (touchActiveCount > 0) touchActiveCount -= 1;
+    flushQueuedRender();
+  },
+  { capture: true, passive: true }
+);
+document.addEventListener(
+  "touchcancel",
+  () => {
+    if (touchActiveCount > 0) touchActiveCount -= 1;
+    flushQueuedRender();
+  },
+  { capture: true, passive: true }
+);
 
 if (session) {
   refresh();

@@ -443,6 +443,18 @@ python3 app.py --port 5001
   - [x] 「初期場札をめくる」「n101・指示カードのやり直し」「nm1・nm10 でマイナススタート」を削除
   - [x] `_flip_initial_field_card`・`GAME_START_FLIPS_INITIAL_CARD` を削除。
     `_draw` が場札0枚・1枚でも安全に動くように修正
+- [x] SHOT 指名のタップ不具合修正（2026-11）
+  - 原因: enterShotNaming() が renderPrompt() だけ呼び、席の targetable/dimmed が次回再描画まで付かず、
+    その間に席をタップすると cancelShotNaming() が走って指名モードが解除されていた
+    （5秒の自動更新まで最大5秒の間だけ失敗するように見えた）。
+  - 修正1: enterShotNaming()/cancelShotNaming() で renderPrompt() に加え renderPlayers()/renderHand() を即時実行
+  - 修正2: 席クリックは DOM クラスではなく shotCard().targets に playerId が含まれるかで判定
+  - 修正3: revision と UI 状態（指名モード・選んだカード・画面サイズ）が同じなら renderGame を省略。
+    押している最中 (pointerdown/touchstart〜up) は再描画を遅延
+  - 修正4: .player.targetable に cursor: pointer / touch-action: manipulation を追加。
+    「やめる」ボタンの表示ラッパーも指名モードに合わせて表示/非表示
+  - 検証: tests/ui_check.py に SHOT 即時タップ (a)・タップ中再描画 (b)・非指名席タップ (c)・
+    MutationObserver による再描画0回確認を追加
 - [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
 - [ ] フェーズ4: CPU 強化
 

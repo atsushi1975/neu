@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -30,8 +31,8 @@ MOBILE = {"is_mobile": True, "has_touch": True, "device_scale_factor": 2}
 # ------------------------------------------------------------------ API
 
 
-def api_request(method: str, path: str, body: dict | None = None, token: str | None = None):
-    url = f"{BASE_URL}{path}"
+def api_request(method: str, path: str, body: dict | None = None, token: str | None = None, base_url: str | None = None):
+    url = f"{(base_url or BASE_URL)}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
@@ -370,7 +371,8 @@ def run_scenario(browser, players_count: int, viewport: tuple[int, int], tag: st
     check_prompt_single_line(host.page)
 
     table_faces = host.page.locator("#table-card .card-face").count()
-    assert table_faces == 1, f"場札が {table_faces} 枚分表示されています: #table-card"
+    # ゲーム開始時は場札は空（初期場札のめくりは廃止済み）。
+    assert table_faces == 0, f"開始直後の場札が {table_faces} 枚表示されています: #table-card"
     assert host.page.locator("#table-card .pile-under").count() == 0, "場札の重なり(pile-under)があります"
     assert host.page.locator("#table-count").inner_text().startswith("場札"), host.page.locator("#table-count").inner_text()
     assert host.page.locator("#table-deck .deck-back").count() == 1, "山札の裏面がありません"
@@ -401,6 +403,199 @@ def run_scenario(browser, players_count: int, viewport: tuple[int, int], tag: st
         context.close()
 
 
+# ------------------------------------------------------------------ SHOT 指名シナリオ（手動実行用・in-process）
+
+
+def _start_inprocess_server(port: int):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from web import create_app
+
+    app = create_app()
+    thread = threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
+        daemon=True,
+    )
+    thread.start()
+    wait_for_server_port(port)
+    return app, thread
+
+
+def wait_for_server_port(port: int, timeout: float = 30.0) -> None:
+    deadline = time.time() + timeout
+    base = f"http://127.0.0.1:{port}"
+    while time.time() < deadline:
+        try:
+            api_request("GET", "/api/health", base_url=base)
+            return
+        except Exception:
+            time.sleep(0.2)
+    raise RuntimeError("サーバーが起動しませんでした")
+
+
+def _setup_shot_room(base_url: str):
+    created = api_request("POST", "/api/rooms", {"name": "host"}, base_url=base_url)
+    room_id = created["roomId"]
+    host_pid = created["playerId"]
+    host_token = created["token"]
+    for index in range(1, 4):
+        joined = api_request(
+            "POST", f"/api/rooms/{room_id}/join", {"name": f"p{index}"}, base_url=base_url
+        )
+    api_request("POST", f"/api/rooms/{room_id}/start", {}, token=host_token, base_url=base_url)
+
+    # 現在の手番プレイヤーに SHOT を持たせる（in-process で状態を書き換える）。
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from gameplatform import rooms
+
+    room = rooms.get_room(room_id)
+    game = room.game
+    state = game.state
+    shot_card = None
+    for player in state.players:
+        for card in player.hand:
+            if card.kind == "shot":
+                shot_card = card
+                break
+        if shot_card is not None:
+            break
+    if shot_card is None:
+        for card in list(state.deck):
+            if card.kind == "shot":
+                shot_card = card
+                state.deck.remove(card)
+                break
+    host_seat = game.seat_of(host_pid)
+    if shot_card is not None and shot_card not in state.players[host_seat].hand:
+        displaced = state.players[host_seat].hand[0]
+        state.players[host_seat].hand[0] = shot_card
+        state.deck.append(displaced)
+    state.current_player = host_seat
+    state.cards_remaining = 1
+    game.revision += 1
+
+    return room_id, host_pid, host_token
+
+
+def _adopt_session(page, base_url: str, room_id: str, token: str, player_id: str) -> None:
+    page.goto(f"{base_url}/rooms/{room_id}")
+    page.wait_for_load_state()
+    page.evaluate(
+        "([key, value]) => localStorage.setItem(key, JSON.stringify(value))",
+        [f"neu:{room_id}", {"token": token, "playerId": player_id, "name": "host"}],
+    )
+    page.reload()
+    page.wait_for_load_state()
+    page.wait_for_timeout(1500)
+    page.evaluate("() => window.refresh && window.refresh()")
+    page.wait_for_timeout(1000)
+
+
+def _tap_shot_card(page) -> None:
+    cards = page.locator("#hand button.card")
+    for i in range(cards.count()):
+        card_id = cards.nth(i).get_attribute("data-card-id")
+        if card_id and card_id.startswith("shot"):
+            cards.nth(i).click()
+            return
+    raise AssertionError("SHOT カードが手札に見つかりません")
+
+
+def run_shot_immediate_scenario(browser, base_url: str) -> None:
+    room_id, host_pid, host_token = _setup_shot_room(base_url)
+    context = browser.new_context(viewport={"width": 390, "height": 844}, **MOBILE)
+    try:
+        page = context.new_page()
+        _adopt_session(page, base_url, room_id, host_token, host_pid)
+        check_render_stability(page, 5.0)
+        _tap_shot_card(page)
+        page.wait_for_timeout(300)
+        targetable = page.locator("#players .player.targetable")
+        assert targetable.count() > 0, "指名できる席が光っていません"
+        # SHOT をタップした直後に、有効な席をタップする。
+        targetable.first.click()
+        page.wait_for_timeout(1500)
+        state = api_request("GET", f"/api/rooms/{room_id}/state", token=host_token, base_url=base_url)["game"]
+        assert state["currentPlayerId"] != host_pid, "指名が成功していません（手番が進んでいません）"
+        print(f"[shot-immediate] OK: turn advanced to {state['currentPlayerId']}")
+    finally:
+        context.close()
+
+
+def run_shot_touch_scenario(browser, base_url: str) -> None:
+    room_id, host_pid, host_token = _setup_shot_room(base_url)
+    context = browser.new_context(viewport={"width": 390, "height": 844}, **MOBILE)
+    try:
+        page = context.new_page()
+        _adopt_session(page, base_url, room_id, host_token, host_pid)
+        _tap_shot_card(page)
+        page.wait_for_timeout(300)
+        target = page.locator("#players .player.targetable").first
+        box = target.bounding_box()
+        assert box is not None
+        cx = box["x"] + box["width"] / 2
+        cy = box["y"] + box["height"] / 2
+        cdp = context.new_cdp_session(page)
+        # タップの最中に再描画を割り込ませる。
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": cx, "y": cy}]})
+        page.evaluate("() => window.refresh && window.refresh()")
+        time.sleep(0.2)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        page.wait_for_timeout(1500)
+        state = api_request("GET", f"/api/rooms/{room_id}/state", token=host_token, base_url=base_url)["game"]
+        assert state["currentPlayerId"] != host_pid, "タップ中に再描画が割り込んでも指名が成功するべきです"
+        print(f"[shot-touch] OK: turn advanced to {state['currentPlayerId']}")
+    finally:
+        context.close()
+
+
+def run_shot_cancel_scenario(browser, base_url: str) -> None:
+    room_id, host_pid, host_token = _setup_shot_room(base_url)
+    context = browser.new_context(viewport={"width": 390, "height": 844}, **MOBILE)
+    try:
+        page = context.new_page()
+        _adopt_session(page, base_url, room_id, host_token, host_pid)
+        _tap_shot_card(page)
+        page.wait_for_timeout(300)
+        assert page.locator("#players .player.targetable").count() > 0, "指名モードに入っていません"
+        # 指名できない席（targetable でない席）をタップすると取り消される。
+        non_targetable = page.locator("#players .player:not(.targetable)").first
+        if non_targetable.count() > 0:
+            non_targetable.click()
+        else:
+            # 空き部分をタップ。
+            page.locator("#players").click(position={"x": 5, "y": 5})
+        page.wait_for_timeout(500)
+        assert page.locator("#players .player.targetable").count() == 0, "指名モードが取り消されていません"
+        print("[shot-cancel] OK: naming cancelled")
+    finally:
+        context.close()
+
+
+def check_render_stability(page, duration: float = 5.0) -> None:
+    page.evaluate(
+        """() => {
+            window.__mutCount = 0;
+            const target = document.getElementById('players');
+            const obs = new MutationObserver((muts) => {
+                for (const m of muts) {
+                    window.__mutCount += m.addedNodes.length + m.removedNodes.length;
+                }
+            });
+            obs.observe(target, { childList: true, subtree: true });
+            window.__obs = obs;
+        }"""
+    )
+    time.sleep(duration)
+    count = page.evaluate("() => window.__mutCount")
+    page.evaluate("() => { if (window.__obs) window.__obs.disconnect(); }")
+    assert count == 0, f"#players の子要素が {count} 回作り直されています"
+    print(f"[render-stability] OK: {count} changes over {duration}s")
+
+
 def main() -> None:
     if port_in_use(5001):
         raise SystemExit(
@@ -428,6 +623,22 @@ def main() -> None:
             server.wait(timeout=10)
         except subprocess.TimeoutExpired:
             server.kill()
+
+    # SHOT 指名シナリオ（in-process サーバー）
+    shot_port = 5002
+    _app, _thread = _start_inprocess_server(shot_port)
+    shot_base = f"http://127.0.0.1:{shot_port}"
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                run_shot_immediate_scenario(browser, shot_base)
+                run_shot_touch_scenario(browser, shot_base)
+                run_shot_cancel_scenario(browser, shot_base)
+            finally:
+                browser.close()
+    finally:
+        pass
 
 
 if __name__ == "__main__":
