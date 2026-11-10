@@ -7,7 +7,7 @@ import argparse
 from web import create_app
 
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 5000
+DEFAULT_PORT = 5001
 
 
 def parse_args() -> argparse.Namespace:

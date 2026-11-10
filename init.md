@@ -117,16 +117,17 @@ LICENSE             All rights reserved
   - `nm1`, `nm10` は減算。
   - `n101` は「合計を 101 にする」（加算ではない）。
 - 合計が 0 未満になることは許可する。
-- 合計が **101 を超えたら**、出したプレイヤーがそのラウンドの負け（回避手段なし）。
-- また、手番の人が「**次に出すカードがどれを出しても合計が 101 を超える**」状態に
-  なったら、カードを出す前に、その人がそのラウンドの負けになる（**安全なカード無し負け**）。
+- 合計が **101 を超える数字カードは出せない**（`legal_actions` から除外し、`apply` では
+  `IllegalAction` にする。カードを出した結果 101 超えになることは設計上ない）。
+- 手番の人が「**次に出すカードがどれを出しても合計が 101 を超える**」状態に
+  なったら、カードを出す前に、その人がそのラウンドの負けになる（**出せないカード負け**）。
   - 「安全なカード」= 合法手のうち、出しても合計が 101 を超えない手。
     PASS・TURN・SHOT・DOUBLE（合法なら）・`n101`・`-1`・`-10` は常に安全。
     `n101` は合計が 101 になるだけで安全（超えない）。
     DOUBLE 中（`cards_remaining >= 2`）の1枚目に出せない DOUBLE は手札に数えない
     （1枚目では出せないので安全カードに数えない）。
-- 安全なカードが1枚も無ければ、カードを出さずにその人のラウンド負け（バースト時と同じ
-  チップ減・脱落・ゲーム終了・次ラウンド開始の処理を行う）。負けが連鎖して起きることもある。
+- 安全なカードが1枚も無ければ、カードを出さずにその人のラウンド負け
+  （チップ減・脱落・ゲーム終了・次ラウンド開始の処理を行う）。負けが連鎖して起きることもある。
 
 ### 指示カード
 
@@ -135,35 +136,39 @@ LICENSE             All rights reserved
 - `SHOT`: 自分以外の生存プレイヤー1人を指名し、次の手番をその人にする。
 - `DOUBLE`: 次の手番の人は2枚出す。
 
-### 補充と捨て札
+### 補充と場札
 
 - カードを1枚出すたびに、手札が3枚になるよう山札から自動補充する
   （リアルの「引き忘れ」は発生させない）。
-- 山札が切れたら、捨て札を全部シャッフルして新しい山札にする。
-- 出したカードは捨て札へ送る。
-- ラウンド開始時に場に置いた初期場札は、そのラウンド中は場に残す。
+- 山札が切れたら、場札をシャッフルして新しい山札にする（定数 `KEEP_TOP_ON_RESHUFFLE = True`。
+  True なら場札の一番上（直前に出したカード or 初期場札）を残し、それ以外をシャッフルする。
+  False なら場札の全部をシャッフルする）。
+- 出したカードはすべて場札の山（`table`、末尾が一番上）の一番上に積む。
+- ラウンド開始時にめくった初期場札も同じ山に積む。
 
 ### ラウンドの終了とチップ
 
-- 合計が 101 を超えたプレイヤーがラウンドの負け（バースト）。
-- 手番の人が出せるカードがすべて 101 を超える場合は、カードを出さずにラウンドの負け（安全なカード無し）。
-- 負けた人はチップ1枚を場に置く（戻らない）。
+- 手番の人が出せるカードがすべて 101 を超える場合は、カードを出さずにそのラウンドの負け
+  （reason は `"no_playable_card"`）。
+- 負けた人はチップ1枚を失う（戻さない）。
 - チップが 0 になった人は脱落。
 - 1人だけ残ったらゲーム終了、その人が勝者。
 
 ### 新しいラウンド
 
-- 全カード（手札・捨て札・山札・初期場札）を集めてシャッフルし、
-  残りのプレイヤーに3枚ずつ配る。
-- ディーラーは前ラウンドの負け。
-- 負けた人が脱落した場合は、その人の次（**その時点の進行方向の隣**）の生存プレイヤー。
-- 回る向きは新ラウンドで時計回り（`+1`）にリセット。
-- 最初の手番は**ディーラー本人**（＝前ラウンドの負けた人。最初のラウンドでは最初のディーラー）。
+- **カードの回収・シャッフル・再配布はしない**。他のプレイヤーの手札・山札・場札はそのまま引き継ぐ。
+- 山札の上から、数字カード（`n1`〜`n9`, `n10`, `n50`, `nm1`, `nm10`）が出るまで1枚ずつめくり、
+  めくったカードをすべて場札に積む。n101 や指示カードが出たら、そのまま場札に積んで次をめくる（やり直し）。
+  最後に出た数字カードが一番上になる。これが新しい初期場札で、合計をそのカードで初期化する。
+- チップを失った人（＝ディーラー）が次のラウンドの最初の手番を持つ。
+- 負けた人が脱落した場合は、その人の次（**その時点の進行方向の隣**）の生存プレイヤーがディーラーで、その人が最初の手番。
+- 脱落したプレイヤーの手札は、場札の一番下に入れる（仮置き。カードの総数を保存するため。一番上のカードは変えない）。
+- 回る向きはリセットせず、そのまま引き継ぐ（TURN で逆回りになっていれば、逆回りのまま新ラウンドが始まる）。
 
 ### ラウンド開始時の初期場札
 
 - 山札の上から、**数字カード（`n1`〜`n9`, `n10`, `n50`, `nm1`, `nm10`）が出るまで**めくる。
-- `n101` と指示カード（`pass`, `turn`, `shot`, `double`）が出たら捨て札へ送ってやり直す。
+- `n101` と指示カード（`pass`, `turn`, `shot`, `double`）が出たら場札に積んでやり直す。
 - 出た数字カードで合計を初期化する（`nm1`・`nm10` なら合計は -1・-10 からのマイナススタート）。
 - 最初の手番は**ディーラー本人**（＝前ラウンドの負けた人。最初のラウンドでは最初のディーラー）。
 
@@ -209,6 +214,9 @@ DOUBLE は常に手番を終了させ、次の人の必要枚数を 2 にする�
   状態の RNG（seed 再現用）で全員からシャッフルして選ぶ。`new_game(dealer=...)` で固定も可能）。
 - チップ初期枚数 3（`STARTING_CHIPS`）、手札枚数 3（`HAND_SIZE`）、
   101 の上限（`LOSING_LIMIT = 101`）。
+- 最初の手番はディーラー本人（`neu.engine.FIRST_TURN_IS_DEALER = True`。False で変えられる）。
+- 場札を山札に戻すとき（山札が尽きたとき）の「一番上を残す」は
+  `neu.engine.KEEP_TOP_ON_RESHUFFLE = True`（False なら場札の全部をシャッフルする。仮置き）。
 - これらの値は `neu/engine.py` 冒頭の定数に集約している。
 
 ---
@@ -222,7 +230,7 @@ DOUBLE は常に手番を終了させ、次の人の必要枚数を 2 にする�
 - `apply` は状態を破壊せず、**新しい `GameState` を返す**（内部で deepcopy）。
 - 乱数は状態が持つ `random.Random` のみ。`new_game(..., seed=...)` で再現可能。
 - 公開情報と非公開情報を分ける `view_for(player)` を用意。
-  他人の手札は枚数のみ、山札・捨て札は枚数のみ（捨て札の一番上のみ公開）。
+  他人の手札は枚数のみ、山札・場札は枚数のみ（場札の一番上のみ公開）。
 - `to_dict` / `from_dict` で JSON に変換できる（乱数状態も含めて完全復元）。
 
 ### 状態
@@ -234,7 +242,7 @@ Card(id, kind, value, copy)
 PlayerState(seat, chips, hand, alive)
 
 GameState(
-    players, deck, discard, field_card,
+    players, deck, table,
     total,          # 場の合計（API では "sum"）
     direction,      # +1=時計回り（席番号増加）, -1=反時計回り
     dealer, current_player, cards_remaining,
@@ -243,11 +251,11 @@ GameState(
 )
 ```
 
-- `round_results: list[dict]`: ラウンド結果の構造化リスト。ラウンド負け（バースト・安全なカード無し）が起きるたび
-  `_lose_round` の中で1件追加する。内容: `round`(ラウンド番号), `loser`(席番号), `reason`（"bust" | "no_safe_card"）,
-  `card_id`(bust のときのみ。出したカードの id), `sum_after`(bust のときのみ。出した後の合計),
-  `chips_left`, `eliminated`, `game_over`, `winner`, `hand`(no_safe_card のときのみ。負けた人の手札を
-  `card_to_dict` と同じ形で。bust のとき None)。
+- `round_results: list[dict]`: ラウンド結果の構造化リスト。ラウンド負け（`no_playable_card`）が起きるたび
+  `_lose_round` の中で1件追加する。内容: `round`(ラウンド番号), `loser`(席番号), `reason`（`"no_playable_card"`）,
+  `card_id`（負けても出したカードはないので常に None）, `sum_after`（常に None）,
+  `sum`（負けた時点の合計。リセット前）, `chips_left`, `eliminated`, `game_over`, `winner`,
+  `hand`（`no_playable_card` のときのみ。負けた人の手札を `card_to_dict` と同じ形で）。
 
 ### 公開関数・クラス一覧（`neu.engine`）
 
@@ -255,7 +263,7 @@ GameState(
 | --- | --- |
 | `build_deck()` | 58枚のデッキを生成して返す |
 | `new_game(num_players, seed=None, dealer=None)` | ゲームを初期化して `GameState` を返す（2〜7人）。`dealer` 未指定なら `INITIAL_DEALER`（None = ランダム）に従う |
-| `start_round(state)` | ラウンドを開始する（カード回収・配布・初期場札・手番決定） |
+| `start_round(state)` | 次のラウンドを開始する（カード回収・配布はしない。初期場札をめくって場札に積む・向き引き継ぎ・手番決定） |
 | `legal_actions(state)` | 現在の手番の合法手 `list[Action]` を返す。終了時は空 |
 | `safe_actions(state)` | 現在の手番の「出したとしても合計が 101 を超えない」安全な合法手を返す |
 | `apply(state, action)` | 手を適用した**新しい** `GameState` を返す。不正手は例外 |
@@ -263,14 +271,15 @@ GameState(
 | `to_dict(state)` / `from_dict(data)` | JSON 互換 dict への変換・復元 |
 | `is_game_over(state)` / `winner(state)` | 終了判定・勝者 |
 | `next_alive(state, seat, direction)` | 指定方向で次の生存プレイヤーの席番号 |
+| `projected_total(state, card)` | カードを出した後の合計を計算する（合法手・安全な手の判定で共用） |
 | `card_to_dict(card)` / `card_from_dict(data)` | カードの変換 |
 
 ### 安全なカードの判定
 
-- 「合計が 101 を超えない」計算は `_projected_total(state, card)` に集約し、
-  バースト判定（`apply`）と安全な手の判定（`safe_actions`）の両方で使う（重複させない）。
+- 「合計が 101 を超えない」計算は `projected_total(state, card)` に集約し、
+  合法手（`legal_actions`）と安全な手（`safe_actions`）の両方で使う（重複させない）。
 - 手番が決まった直後（ラウンド開始時・手番が移ったとき・DOUBLE 中の2枚目を出す前）に
-  `_check_no_safe_card` で安全な手が無いかを確認し、無ければ `reason="no_safe_card"` で負けとする。
+  `_check_no_playable_card` で「出せる合法手」が無いかを確認し、無ければ `reason="no_playable_card"` で負けとする。
 
 ### アクション
 
@@ -300,7 +309,7 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 121 テスト（エンジン・アダプタ・API 結合）。
+現在 123 テスト（エンジン・アダプタ・API 結合）。
 
 ### CLI
 
@@ -322,17 +331,17 @@ python3 -m neu.cli --players 4 --seed 1 --dealer 2   # 最初のディーラー�
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 app.py --port 5000
+python3 app.py --port 5001
 ```
 
-ブラウザで `http://localhost:5000/` を開く。カード画像は `static/img/cards/` から配信する。
+ブラウザで `http://localhost:5001/` を開く。カード画像は `static/img/cards/` から配信する。
 
 ### 構成
 
 - `hannin-wa-odoru` と同じ共通基盤（`gameplatform/` + `games/<key>/`）を使う。
 - `games/neu/__init__.py` で `GameDefinition(key="neu", title="ノイ", min_players=2, max_players=7)` を登録。
 - `games/neu/adapter.py` の `NeuGame` が `GameState` を保持し、`revision` / `phase` / `start()` を提供。
-- ルール判定はすべて `neu/engine.py` に委譲。API / UI 側で合法手やバースト判定を再実装しない。
+- ルール判定はすべて `neu/engine.py` に委譲。API / UI 側で合法手や101超え判定を再実装しない。
 - カードの物理的な一意性は `cardId = "<カードID>#<copy>"`（例: `n10#3`）。画像名・ログには `Card.id` を使う。
 - 公開 view は他人の手札の中身を一切含まず、`me.hand` だけが中身を持つ。
 - `events` は UI 用の構造化ログ（`seq` / `kind` / `playerId` / `cardId` / `sumAfter` / `targetId` など）。
@@ -358,23 +367,22 @@ python3 app.py --port 5000
 - `lastRound` は構造化されたラウンド結果（`GameState.round_results` の最新件）から作る。
   既存キー（`round`, `loserId`, `loserName`, `cardId`, `card`, `sumAfter`, `sum`, `chipsLeft`, `chips`,
   `eliminated`, `alive`, `gameOver`, `winnerId`, `winnerName`, `nextRound`, `message`）に加え、
-  `reason`（"bust" | "no_safe_card"）と `revealedHand`（no_safe_card のときのみ、負けた人の手札）を持つ。
-  イベントログの `round_end` も構造化結果から作る（バースト・安全なカード無しを区別する）。
+  `reason`（`"no_playable_card"`）と `revealedHand`（no_playable_card のときのみ、負けた人の手札）を持つ。
+  イベントログの `round_end` も構造化結果から作る。
 
 認証は `X-Player-Token`（または `Authorization: Bearer`）。トークンは localStorage の
 `neu:<roomId>` に保存する。
 
 ### UI（スマホ縦画面優先）
 
-- 場の合計を特大表示。ラウンド・向き・残り枚数・山札/捨て札・場札をまとめて表示。
+- 場の合計を特大表示。ラウンド・向き・残り枚数・山札/場札・場札の枚数を表示。
 - 手札は3枚を横並び。カードをタップして選択し、「出す」で確定する2タップ操作。
 - 各カードに「出すと合計 XX」を表示。101 を超える場合は赤で警告し、確認ボタンも警告文に変える。
 - SHOT は指名先を選ぶまで確定できない。
 - DOUBLE 中の1枚目はサーバーが合法手から除外し、UI でも「1枚目に出せません」と表示する。
 - 手番が回ってきたらプロンプト・ページタイトル・（対応端末では）振動で通知。
-- ラウンド敗者が出たらトーストで「バースト／合計／残りチップ／脱落」を演出。
-  - バースト: 「◯◯さんが△△でバースト（合計▽▽）」。
-  - 安全なカード無し: 「◯◯さんは出せるカードがすべて101を超えるため負け」。
+- ラウンド敗者が出たらトーストで「合計／残りチップ／脱落」を演出。
+  - no_playable_card: 「◯◯さんは出せるカードがすべて101を超えるため負け」。
     このとき `revealedHand`（負けた人の手札）を UI が使えるように見せる。
 - 他人の手札は枚数のみ。裏面は CSS で描画する（`back.png` は未提供）。
 - 画像が404でも CSS の仮カードで遊べる（`onerror` で画像を隠す）。
@@ -399,11 +407,14 @@ python3 app.py --port 5000
   - [x] `NeuGame` アダプタ・公開 view・構造化ログ・lastRound
   - [x] 部屋作成→参加→開始→ランダム対戦→終了の API 結合テスト
   - [x] スマホ縦画面の対戦 UI（2タップ操作・SHOT 指名・警告・結果表示）
-  - [x] 全 121 テスト通過
+  - [x] 全 123 テスト通過
 - [x] ルール修正（テストプレイで見つかった点）
-  - [x] 出せるカードがすべて 101 超えなら、カードを出さずにラウンド負け（`no_safe_card`）
+  - [x] 出せるカードがすべて 101 超えなら、カードを出さずにラウンド負け（`no_playable_card`）
   - [x] 次のラウンドは負けた人（ディーラー）から開始（最初の手番 = ディーラー本人）
   - [x] 最初のディーラーはランダム（`INITIAL_DEALER = None` / `new_game(dealer=...)`）
+  - [x] 場札は「場札（field_card）＋ 捨て札（discard）」から場札の山1つ（`table`）に統合。
+    山札が尽きたときだけ場札をシャッフル（`KEEP_TOP_ON_RESHUFFLE = True`、仮置き）。
+  - [x] ラウンド終了後はカードを回収・シャッフル・再配布せず、継続処理で次のラウンドへ。
 - [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
 - [ ] フェーズ4: CPU 強化
 

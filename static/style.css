@@ -563,7 +563,7 @@ body.room {
 
 .field {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 10px;
   background: linear-gradient(180deg, var(--felt), #0a1628);
@@ -595,7 +595,7 @@ body.room {
 .pile-card .card-face {
   position: relative;
   flex: 0 0 auto;
-  width: 66px;
+  width: 44px;
   aspect-ratio: 5 / 7;
 }
 
@@ -659,6 +659,8 @@ body.room {
 
 .card {
   position: relative;
+  width: min(26vw, 108px);
+  justify-self: center;
   aspect-ratio: 5 / 7;
   padding: 0;
   overflow: hidden;
@@ -706,7 +708,7 @@ body.room {
   z-index: 2;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   background: #fbf7ec;
 }
 
@@ -728,7 +730,7 @@ body.room {
 }
 
 .card-fallback-label {
-  font-size: clamp(1.45rem, 8vw, 2.5rem);
+  font-size: min(11vw, 44px);
   font-weight: 900;
   line-height: 1;
   letter-spacing: -0.02em;
@@ -736,7 +738,7 @@ body.room {
 
 .card-fallback-desc {
   color: #454545;
-  font-size: 0.58rem;
+  font-size: min(3.6vw, 13px);
   line-height: 1.32;
 }
 
@@ -773,7 +775,7 @@ body.room {
   padding: 3px 3px 4px;
   background: rgba(5, 10, 18, 0.82);
   color: #fff;
-  font-size: 0.6rem;
+  font-size: min(2.8vw, 11px);
   font-weight: 700;
   line-height: 1.25;
   text-align: center;
@@ -1144,11 +1146,11 @@ body.room {
   }
 
   .pile-card {
-    min-height: 118px;
+    min-height: 104px;
   }
 
   .pile-card .card-face {
-    width: 80px;
+    width: 52px;
   }
 
   .hand {
