@@ -3,6 +3,7 @@ const storageKey = `neu:${roomId}`;
 
 const els = {
   error: document.getElementById("error"),
+  exitBanner: document.getElementById("exit-banner"),
   joinPanel: document.getElementById("join-panel"),
   joinForm: document.getElementById("join-form"),
   joinName: document.getElementById("join-name"),
@@ -76,6 +77,11 @@ let renderQueued = false;
 let pointerActiveCount = 0;
 let touchActiveCount = 0;
 let lastRenderKey = null;
+let exitRequest = null;
+let noticeState = null;
+let lastNoticeId = null;
+let exitCountdownDeadline = null;
+let exitCountdownTimer = null;
 
 function readSession() {
   try {
@@ -145,6 +151,13 @@ function apply(data) {
   roomState = data.room;
   youState = data.you || youState;
   gameState = data.game;
+  exitRequest = data.exitRequest || null;
+  noticeState = data.notice || null;
+  if (exitRequest) {
+    exitCountdownDeadline = Date.now() + (exitRequest.remaining || 0) * 1000;
+  } else {
+    exitCountdownDeadline = null;
+  }
   if (gameState && shotNaming && !gameState.me.hand.some((card) => card.cardId === pendingShotCardId)) {
     cancelShotNaming();
   }
@@ -166,6 +179,9 @@ function apply(data) {
     document.body.classList.add("in-game");
     renderGame();
   }
+  renderExitBanner();
+  startExitCountdown();
+  handleNotice(noticeState);
 }
 
 /* ------------------------------------------------------------------ ロビー */
@@ -721,7 +737,116 @@ function renderResult() {
   els.resultOverlay.hidden = false;
 }
 
-/* ------------------------------------------------------------------ 通信 */
+
+
+/* ------------------------------------------------------------------ 退出申請 */
+
+function exitRemaining() {
+  if (!exitCountdownDeadline) return exitRequest ? exitRequest.remaining || 0 : 0;
+  return Math.max(0, Math.ceil((exitCountdownDeadline - Date.now()) / 1000));
+}
+
+function renderExitBanner() {
+  const banner = els.exitBanner;
+  if (!banner) return;
+  if (!exitRequest) {
+    banner.hidden = true;
+    banner.replaceChildren();
+    return;
+  }
+  banner.hidden = false;
+  banner.replaceChildren();
+  const remaining = exitRemaining();
+  const by = exitRequest.by || "?";
+  const mine = Boolean(exitRequest.mine);
+  const myVote = exitRequest.myVote;
+
+  if (mine) {
+    banner.append(el("span", "exit-banner-text", `退出の申請中 …みんなの返事を待っています(残り${remaining}秒)`));
+    const cancel = el("button", "ghost small", "取り消す");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => { void cancelExit(); });
+    banner.append(cancel);
+  } else if (myVote === null || myVote === undefined) {
+    banner.append(el("span", "exit-banner-text", `${by}さんが退出を申請しています(残り${remaining}秒)`));
+    const approve = el("button", "primary small", "許可");
+    approve.type = "button";
+    approve.addEventListener("click", () => { void voteExit(true); });
+    const reject = el("button", "ghost small", "拒否");
+    reject.type = "button";
+    reject.addEventListener("click", () => { void voteExit(false); });
+    banner.append(approve);
+    banner.append(reject);
+  } else {
+    const label = myVote ? "許可" : "拒否";
+    banner.append(el("span", "exit-banner-text", `あなたは${label}しました。結果を待っています(残り${remaining}秒)`));
+  }
+}
+
+function startExitCountdown() {
+  if (exitCountdownTimer) {
+    clearInterval(exitCountdownTimer);
+    exitCountdownTimer = null;
+  }
+  if (!exitRequest) return;
+  exitCountdownTimer = setInterval(() => {
+    if (!exitRequest) {
+      clearInterval(exitCountdownTimer);
+      exitCountdownTimer = null;
+      return;
+    }
+    renderExitBanner();
+  }, 1000);
+}
+
+function handleNotice(notice) {
+  if (!notice || !notice.id) return;
+  if (notice.id === lastNoticeId) return;
+  lastNoticeId = notice.id;
+  els.toastTitle.textContent = notice.text || "";
+  els.toastBody.textContent = "";
+  els.toast.classList.toggle("danger", false);
+  els.toast.hidden = false;
+  els.toast.classList.remove("show");
+  void els.toast.offsetWidth;
+  els.toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    hideToast();
+  }, 6000);
+}
+
+async function requestExit() {
+  try {
+    await request(`/api/rooms/${roomId}/exit-request`, { method: "POST", body: {} });
+    await refresh();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function voteExit(approve) {
+  if (!exitRequest) return;
+  try {
+    await request(`/api/rooms/${roomId}/exit-vote`, {
+      method: "POST",
+      body: { requestId: exitRequest.id, approve },
+    });
+    await refresh();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function cancelExit() {
+  try {
+    await request(`/api/rooms/${roomId}/exit-cancel`, { method: "POST", body: {} });
+    await refresh();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
 
 async function refresh() {
   if (!session) return;
@@ -810,6 +935,12 @@ async function connectEvents() {
 
 els.leaveRoom.addEventListener("click", async () => {
   if (!session) return;
+  const inProgress = Boolean(gameState && gameState.phase === "playing");
+  if (inProgress) {
+    if (!window.confirm("ゲームの途中で退出するには、他のプレイヤー全員の許可が必要です。申請しますか？")) return;
+    await requestExit();
+    return;
+  }
   if (!window.confirm("ルームから退出しますか？")) return;
   try {
     await request(`/api/rooms/${roomId}/leave`, { method: "POST", body: {} });

@@ -1185,3 +1185,38 @@ body.room.in-game .pile-card {
     scroll-behavior: auto !important;
   }
 }
+
+.exit-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  max-width: calc(100vw - 24px);
+}
+
+.exit-banner[hidden] {
+  display: none;
+}
+
+.exit-banner-text {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exit-banner button {
+  flex: 0 0 auto;
+}

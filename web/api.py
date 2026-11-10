@@ -23,6 +23,7 @@ def _token() -> str:
 
 
 def _room_state(room: rooms.Room, player_id: str) -> dict[str, Any]:
+    rooms.evaluate_exit_request(room) if hasattr(rooms, "evaluate_exit_request") else None
     game_view = None
     if room.game is not None:
         game_view = room.definition.view(room.game, player_id)
@@ -32,6 +33,8 @@ def _room_state(room: rooms.Room, player_id: str) -> dict[str, Any]:
         # クライアントにホスト判定を推測させない（トークンと部屋の対応はサーバーが知っている）。
         "you": {"id": player_id, "isHost": room.host_id == player_id},
         "game": game_view,
+        "exitRequest": rooms.exit_request_view(room, player_id),
+        "notice": rooms.notice_view(room),
     }
 
 
@@ -178,6 +181,44 @@ def leave_room(room_id: str):
     )
 
 
+@api.post("/rooms/<room_id>/exit-request")
+def exit_request(room_id: str):
+    try:
+        with rooms.LOCK:
+            room, player_id, req_id = rooms.request_exit(room_id, _token())
+        realtime.publish(room_id)
+    except PlatformError as exc:
+        return _error(str(exc), exc.status)
+    return jsonify({"ok": True, "id": req_id})
+
+
+@api.post("/rooms/<room_id>/exit-vote")
+def exit_vote(room_id: str):
+    data = request.get_json(silent=True) or {}
+    request_id = data.get("requestId", data.get("id"))
+    approve = data.get("approve")
+    if not isinstance(approve, bool):
+        return _error("approve は true / false で指定してください。")
+    try:
+        with rooms.LOCK:
+            room, player_id = rooms.vote_exit(room_id, _token(), request_id, approve)
+        realtime.publish(room_id)
+    except PlatformError as exc:
+        return _error(str(exc), exc.status)
+    return jsonify({"ok": True})
+
+
+@api.post("/rooms/<room_id>/exit-cancel")
+def exit_cancel(room_id: str):
+    try:
+        with rooms.LOCK:
+            room, player_id = rooms.cancel_exit(room_id, _token())
+        realtime.publish(room_id)
+    except PlatformError as exc:
+        return _error(str(exc), exc.status)
+    return jsonify({"ok": True})
+
+
 @api.post("/rooms/<room_id>/host")
 def take_host(room_id: str):
     """ホスト権を引き継ぐ（開始前のみ）。詰んだルームの復帰用。"""
@@ -196,7 +237,9 @@ def room_info(room_id: str):
     try:
         with rooms.LOCK:
             room = rooms.get_room(room_id)
+            rooms._evaluate_exit_request(room)
             payload = room.public()
+            payload["notice"] = rooms.notice_view(room)
     except PlatformError as exc:
         return _error(str(exc), exc.status)
     return jsonify(payload)
@@ -234,6 +277,7 @@ def action(room_id: str):
     try:
         with rooms.LOCK:
             room, player_id = rooms.authenticate(room_id, _token())
+            rooms._evaluate_exit_request(room)
             game = room.game
             if game is None:
                 return _error("ゲームがまだ開始していません。")

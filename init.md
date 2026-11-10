@@ -490,3 +490,37 @@ python3 app.py --port 5001
 - CPU も必ず `legal_actions` / `apply` を通す。UI や API にルールを足さない。
 - 開始 UI は現在 CPU 人数を出していない。`cpu_driver` を登録したら
   `startOptions` 相当の人数選択を戻す。
+
+---
+
+## 11. 退出システム（承認制）— 2026-11 追加
+
+共通基盤 `gameplatform/rooms.py` に実装。ゲーム非依存。
+
+### 定数
+- `EXIT_VOTE_SECONDS = 30`
+- `EXIT_COOLDOWN_SECONDS = 120`
+- `EXIT_NOTICE_SECONDS = 60`（catan の `NOTICE_SECONDS` 相当）
+
+### 仕様
+- 進行中のゲーム（開始済みで未終了）でのみ「退出の申請」が可能。他の**全員**の許可が必要。
+- 全員承認でゲーム中止 → 全員がその部屋のロビーに戻る。部屋・プレイヤー・ホストは残る。通知「ゲームは中止されました（◯◯さんの退出）」。
+- 1人でも拒否、または30秒以内に全員が答えなければ却下。申請者は120秒再申請不可（クールダウン）。申請者本人の取り消しはクールダウンなし。
+- 他人の投票内容は誰にも見せない。見えるのは自分の投票と残り秒数のみ。
+- 申請・投票・取り消しは座席のある人（認証トークンを持つ人）だけ。
+- 同時に1部屋1件。申請中にゲームが終わったら申請は自動で消える。
+- CPU プレイヤー（`id` が `"cpu"` で始まる人）は自動承認。人間が申請者だけで他が全部 CPU なら即承認。
+- ゲーム終了後は承認なしで即退出可能。`leave_room` の判定は「進行中（未終了）」かどうか（`_is_finished(game)`）。
+
+### サーバー側
+- `Room` に `exit_request`, `exit_cooldown`, `notice`, `exit_seq`, `notice_seq`, `exit_timer` を追加。
+- 判定は `_evaluate_exit_request(room)` に集約。すべての API 呼び出し冒頭（遅延評価）と期限到来時（`threading.Timer`）に呼ぶ。
+- 中止処理: `game=None`, `cpu_driver=None`, CPU スレッド停止, CPU プレイヤーを `players` から除外, `version` を進める。人間プレイヤーとホストは残す。
+- API: `POST /api/rooms/<id>/exit-request`, `exit-vote`, `exit-cancel`（いずれも `X-Player-Token` 認証必須）。
+- 状態 API / SSE: `exitRequest`（`id`, `by`, `mine`, `myVote`, `remaining`）と `notice`（`id`, `text`）。
+
+### 他リポジトリに共通基盤をコピーする際の注意
+- `gameplatform/rooms.py` の `_now()` はテストから差し替え可能な時計。`EXIT_*` 定数もモジュール属性として差し替え可能。
+- 中止後も `/health` の `playing_rooms` が正しくなるよう、`_is_finished` を使う。
+- CPU プレイヤーの id は `"cpu"` で始める必要がある（`_new_cpus` が `"cpu-..."` を生成）。
+- `notice` / `exit_seq` / `notice_seq` はリセット後も残す（通知が消えないように）。

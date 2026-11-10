@@ -24,6 +24,16 @@ LOCK = threading.RLock()
 # CPU が1手打つ前に待つ時間（秒）。人間が直前の手を見られるように空ける。
 CPU_TURN_DELAY_SECONDS = 1.5
 
+# 退出システムの定数（catan と同じ）。
+EXIT_VOTE_SECONDS = 30
+EXIT_COOLDOWN_SECONDS = 120
+EXIT_NOTICE_SECONDS = 60
+
+
+def _now() -> float:
+    """時計。テストから差し替えられるように関数化する。"""
+    return time.time()
+
 _rooms: dict[str, "Room"] = {}
 _cpu_threads: dict[str, threading.Thread] = {}
 _room_rng = random.Random()
@@ -43,6 +53,13 @@ class Room:
     cpu_driver: Any | None = None
     # CPU の手番を進めるスレッドが動いているか（LOCK 内で更新する）。
     cpu_running: bool = False
+    # 退出申請の状態。
+    exit_request: Any | None = None
+    exit_cooldown: dict[str, float] = field(default_factory=dict)
+    notice: Any | None = None
+    exit_seq: int = 0
+    notice_seq: int = 0
+    exit_timer: Any | None = None
 
     @property
     def started(self) -> bool:
@@ -102,7 +119,8 @@ def leave_room(room_id: str, token: str) -> tuple[Room | None, str, bool]:
     """退出する。戻り値は (ルーム or 消滅なら None, プレイヤー id, ホスト交代の有無)。"""
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        if room.started:
+        _evaluate_exit_request(room)
+        if room.started and not _is_finished(room.game):
             raise RoomError("ゲーム中は退出できません。")
         sessions.revoke_player(room_id, player_id)
         room.players = [player for player in room.players if player["id"] != player_id]
@@ -125,6 +143,7 @@ def take_host(room_id: str, token: str) -> tuple[Room, str]:
     """
     with LOCK:
         room, player_id = authenticate(room_id, token)
+        _evaluate_exit_request(room)
         if room.started:
             raise RoomError("ゲーム中はホストを変更できません。")
         room.host_id = player_id
@@ -135,6 +154,7 @@ def take_host(room_id: str, token: str) -> tuple[Room, str]:
 def start_game(room_id: str, token: str, cpu_count: int = 0) -> tuple[Room, str]:
     with LOCK:
         room, player_id = authenticate(room_id, token)
+        _evaluate_exit_request(room)
         definition = room.definition
         if player_id != room.host_id:
             raise RoomError("開始できるのはホストだけです。", status=403)
@@ -262,6 +282,206 @@ def count_rooms() -> tuple[int, int]:
         return waiting, playing
 
 
+def _cancel_exit_timer(room: Room) -> None:
+    timer = getattr(room, "exit_timer", None)
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+    room.exit_timer = None
+
+
+def _schedule_exit_timer(room: Room) -> None:
+    req = room.exit_request
+    if req is None:
+        return
+    _cancel_exit_timer(room)
+
+    def _fire() -> None:
+        with LOCK:
+            r = _rooms.get(room.id)
+            if r is None or r.exit_request is None:
+                return
+            if r.exit_request.get("id") != req["id"]:
+                return
+            _evaluate_exit_request(r)
+        try:
+            realtime.publish(room.id)
+        except Exception:
+            pass
+
+    delay = max(0.0, req["expires"] - _now()) + 1.0
+    timer = threading.Timer(delay, _fire)
+    timer.daemon = True
+    room.exit_timer = timer
+    timer.start()
+
+
+def _post_notice(room: Room, text: str) -> None:
+    room.notice_seq += 1
+    room.notice = {"id": room.notice_seq, "time": _now(), "text": text}
+
+
+def _notice_view(room: Room) -> dict[str, Any] | None:
+    n = room.notice
+    if n is not None and _now() - n["time"] <= EXIT_NOTICE_SECONDS:
+        return {"id": n["id"], "text": n["text"]}
+    return None
+
+
+def _exit_request_view(room: Room, player_id: str) -> dict[str, Any] | None:
+    req = room.exit_request
+    if req is None:
+        return None
+    if room.player(player_id) is None:
+        return None
+    mine = player_id == req["requester"]
+    asker = room.player(req["requester"])
+    by_name = asker["name"] if asker is not None else req["requester"]
+    if mine:
+        my_vote = None
+    else:
+        my_vote = req["votes"].get(player_id, None)
+    remaining = max(0, int(__import__("math").ceil(req["expires"] - _now())))
+    return {
+        "id": req["id"],
+        "by": by_name,
+        "mine": mine,
+        "myVote": my_vote,
+        "remaining": remaining,
+    }
+
+
+def _abort_game(room: Room) -> None:
+    room.game = None
+    room.cpu_driver = None
+    room.cpu_running = False
+    # CPU プレイヤーを部屋から外す。
+    room.players = [p for p in room.players if not str(p.get("id", "")).startswith("cpu")]
+    _cancel_exit_timer(room)
+    room.version += 1
+
+
+def _evaluate_exit_request(room: Room) -> None:
+    """退出申請の判定を1つにまとめた関数。LOCK 保持下で呼ぶ。"""
+    req = room.exit_request
+    if req is None:
+        return
+    game = room.game
+    if game is None or _is_finished(game):
+        room.exit_request = None
+        _cancel_exit_timer(room)
+        return
+    players = room.players
+    requester_id = req["requester"]
+    asker = next((p for p in players if p["id"] == requester_id), None)
+    # 申請者が部屋にいなければ消す。
+    if asker is None:
+        room.exit_request = None
+        _cancel_exit_timer(room)
+        return
+    others = [p for p in players if p["id"] != requester_id]
+
+    def is_cpu(pid: str) -> bool:
+        return str(pid).startswith("cpu")
+
+    def approved(pid: str) -> bool:
+        if is_cpu(pid):
+            return True
+        return req["votes"].get(pid) is True
+
+    now = _now()
+    # 全員承認 -> 中止。
+    if all(approved(p["id"]) for p in others):
+        name = asker["name"] if asker is not None else requester_id
+        _post_notice(room, f"ゲームは中止されました（{name}さんの退出）")
+        room.exit_request = None
+        _abort_game(room)
+        return
+    # 拒否 or 期限切れ -> 却下。
+    if any((not is_cpu(p["id"])) and req["votes"].get(p["id"]) is False for p in others) or now >= req["expires"]:
+        room.exit_request = None
+        cooldown_until = min(now, req["expires"]) + EXIT_COOLDOWN_SECONDS
+        room.exit_cooldown[requester_id] = cooldown_until
+        _cancel_exit_timer(room)
+        return
+    # まだ pending。
+
+
+def evaluate_exit_request(room: Room) -> None:
+    """公開ラッパ（LOCK 保持下で呼ぶ想定）。"""
+    _evaluate_exit_request(room)
+
+
+def request_exit(room_id: str, token: str) -> tuple[Room, str, int]:
+    with LOCK:
+        room, player_id = authenticate(room_id, token)
+        _evaluate_exit_request(room)
+        game = room.game
+        if game is None or _is_finished(game):
+            raise RoomError("進行中のゲームがありません。")
+        if room.exit_request is not None:
+            raise RoomError("すでに退出要求があります。")
+        wait = room.exit_cooldown.get(player_id, 0) - _now()
+        if wait > 0:
+            raise RoomError(f"退出要求はあと{int(__import__('math').ceil(wait))}秒たってから出し直してください。")
+        room.exit_seq += 1
+        req = {
+            "id": room.exit_seq,
+            "requester": player_id,
+            "votes": {},
+            "expires": _now() + EXIT_VOTE_SECONDS,
+        }
+        room.exit_request = req
+        _cancel_exit_timer(room)
+        _schedule_exit_timer(room)
+        _evaluate_exit_request(room)
+        return room, player_id, req["id"]
+
+
+def vote_exit(room_id: str, token: str, request_id: Any, approve: bool) -> tuple[Room, str]:
+    with LOCK:
+        room, player_id = authenticate(room_id, token)
+        _evaluate_exit_request(room)
+        req = room.exit_request
+        if req is None:
+            raise RoomError("退出要求はありません。")
+        if player_id == req["requester"]:
+            raise RoomError("自分の退出要求には投票できません。")
+        if request_id != req["id"]:
+            raise RoomError("その退出要求はもう有効ではありません。")
+        if player_id in req["votes"]:
+            raise RoomError("投票済みです。")
+        if not isinstance(approve, bool):
+            raise RoomError("approve は true / false で指定してください。")
+        req["votes"][player_id] = approve
+        _evaluate_exit_request(room)
+        return room, player_id
+
+
+def cancel_exit(room_id: str, token: str) -> tuple[Room, str]:
+    with LOCK:
+        room, player_id = authenticate(room_id, token)
+        _evaluate_exit_request(room)
+        req = room.exit_request
+        if req is None:
+            raise RoomError("退出要求はありません。")
+        if player_id != req["requester"]:
+            raise RoomError("取り消せるのは要求した本人だけです。")
+        room.exit_request = None
+        _cancel_exit_timer(room)
+        return room, player_id
+
+
+def exit_request_view(room: Room, player_id: str) -> dict[str, Any] | None:
+    return _exit_request_view(room, player_id)
+
+
+def notice_view(room: Room) -> dict[str, Any] | None:
+    return _notice_view(room)
+
+
 def authenticate(room_id: str, token: str) -> tuple[Room, str]:
     room = get_room(room_id)
     session = sessions.resolve_for_room(token, room.id)
@@ -273,6 +493,8 @@ def authenticate(room_id: str, token: str) -> tuple[Room, str]:
 def reset() -> None:
     """テスト用。"""
     with LOCK:
+        for room in _rooms.values():
+            _cancel_exit_timer(room)
         _rooms.clear()
         _cpu_threads.clear()
         sessions.reset()
