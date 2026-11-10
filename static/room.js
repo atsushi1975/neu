@@ -74,6 +74,9 @@ let lastRoundKey = null;
 let wasMyTurn = false;
 let logCollapsed = true;
 let lastArrowDir = null;
+let playersRenderRetryTimer = null;
+let playersSizeObserver = null;
+let lastPlayersSize = "";
 
 function readSession() {
   try {
@@ -286,27 +289,24 @@ function renderSummary() {
 
 function renderPlayers() {
   const container = els.players;
+  // パネル非表示・表示直後などでサイズが取れないときは再描画を遅らせる。
+  playersRenderRetryTimer && clearTimeout(playersRenderRetryTimer);
+  playersRenderRetryTimer = null;
+  const rect = container.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) {
+    schedulePlayersRenderRetry();
+    return;
+  }
   const meSeat = gameState.me.seat;
   const seatCount = gameState.players.length;
-  const rect = container.getBoundingClientRect();
-  const radiusX = Math.max(34, rect.width / 2 - 30);
-  const radiusY = Math.max(24, rect.height / 2 - 26);
   const centerX = rect.width / 2;
   const centerY = rect.height / 2;
 
   container.replaceChildren();
   const naming = isShotNaming();
   const namingTargets = naming ? shotCard().targets || [] : [];
+  const tiles = [];
   for (const player of gameState.players) {
-    const position = TableLayout.seatPosition({
-      seat: player.seat,
-      mySeat: meSeat,
-      seatCount,
-      radiusX,
-      radiusY,
-      centerX,
-      centerY,
-    });
     const classes = ["player"];
     if (player.isCurrent && gameState.phase !== "finished") classes.push("current");
     if (player.isMe) classes.push("mine");
@@ -317,8 +317,6 @@ function renderPlayers() {
     }
     const tile = el("div", classes.join(" "));
     tile.dataset.playerId = player.id;
-    tile.style.left = `${position.x}px`;
-    tile.style.top = `${position.y}px`;
 
     const nameRow = el("div", "player-name-row");
     nameRow.append(el("span", "player-name", player.isMe ? "あなた" : player.name));
@@ -349,7 +347,56 @@ function renderPlayers() {
     if (!player.alive) tile.append(el("span", "player-tag out", "脱落"));
 
     container.append(tile);
+    tiles.push({ player, tile });
   }
+
+  lastPlayersSize = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+  // 席の実寸を測ってから配置する（自分の席が下中央、時計回りに等間隔）。
+  // 各席の半径から自分の半分を引くので、席が卓の枠からはみ出さない。
+  for (const { player, tile } of tiles) {
+    const halfWidth = tile.offsetWidth / 2;
+    const halfHeight = tile.offsetHeight / 2;
+    const radiusX = Math.max(0, centerX - halfWidth - 1);
+    const radiusY = Math.max(0, centerY - halfHeight - 1);
+    const position = TableLayout.seatPosition(player.seat, meSeat, seatCount, {
+      radiusX,
+      radiusY,
+      centerX,
+      centerY,
+    });
+    const x = Number(position && position.x);
+    const y = Number(position && position.y);
+    const finite = Number.isFinite(x) && Number.isFinite(y);
+    if (!finite) {
+      console.warn("ノイ: 席位置の計算結果が不正です", position, {
+        seat: player.seat,
+        meSeat,
+        seatCount,
+      });
+    }
+    tile.style.left = `${finite ? x : centerX}px`;
+    tile.style.top = `${finite ? y : centerY}px`;
+  }
+}
+
+function schedulePlayersRenderRetry() {
+  if (playersRenderRetryTimer) return;
+  playersRenderRetryTimer = window.setTimeout(() => {
+    playersRenderRetryTimer = null;
+    renderPlayers();
+  }, 100);
+}
+
+function observePlayersSize() {
+  if (playersSizeObserver || typeof ResizeObserver === "undefined") return;
+  playersSizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (!entry || !gameState || els.gamePanel.hidden) return;
+    const size = `${Math.round(entry.contentRect.width)}x${Math.round(entry.contentRect.height)}`;
+    if (size === lastPlayersSize) return;
+    renderPlayers();
+  });
+  playersSizeObserver.observe(els.players);
 }
 
 function fillPile(container, card, count, emptyText) {
@@ -859,6 +906,9 @@ els.toast.addEventListener("click", () => {
 els.cancelShot.addEventListener("click", () => {
   cancelShotNaming();
 });
+
+// 画面サイズが変わったら席を配置し直す（はみ出し・重なりを防ぐ）。
+observePlayersSize();
 
 // 指名モード中は、卓上の目立った席（targets）をタップして指名して出す。
 // 空き部分や目立たない席をタップした場合は、指名モードをやめる。
