@@ -101,5 +101,76 @@ class RandomPlayTest(unittest.TestCase):
             state = apply(state, chooser.choice(actions))
 
 
+class RoundContinuationInvariantTest(unittest.TestCase):
+    """ランダムプレイ中のラウンド継続（ラウンド負け → 次ラウンド）の不変条件。
+
+    ``start_round`` を差し替えて、ラウンド負けの直前と直後の状態を比較する。
+    """
+
+    def _play(self, players, seed):
+        import neu.engine as engine
+
+        original = engine.start_round
+
+        def checked(state):
+            before_results = len(state.round_results)
+            before_deck = list(state.deck)
+            before_table = list(state.table)
+            before_hands = [list(p.hand) for p in state.players]
+            before_direction = state.direction
+            result = original(state)
+
+            context = f"players={players} seed={seed} round={result.round_number}"
+            # 2ラウンド目以降の開始時は、合計は必ず 0。
+            self.assertEqual(result.total, 0, context)
+            # 向きはリセットせず引き継ぐ。
+            self.assertEqual(result.direction, before_direction, context)
+            eliminated = any(
+                entry["eliminated"]
+                for entry in state.round_results[before_results:]
+            )
+            if not eliminated:
+                # ラウンド負けの前後で、山札・場札・全員の手札は変わらない。
+                self.assertEqual(result.deck, before_deck, context)
+                self.assertEqual(result.table, before_table, context)
+                self.assertEqual(
+                    [p.hand for p in result.players], before_hands, context
+                )
+            else:
+                # 脱落した人の手札は場札の一番下に入るだけ。山札と場札の一番上は変わらない。
+                self.assertEqual(result.deck, before_deck, context)
+                if before_table:
+                    self.assertEqual(result.table[-1], before_table[-1], context)
+            if result.phase == "playing":
+                # 最初の手番はディーラー（＝負けた人）で、出せるカードを持っている。
+                self.assertEqual(result.current_player, result.dealer, context)
+                self.assertTrue(legal_actions(result), context)
+            return result
+
+        engine.start_round = checked
+        try:
+            # ゲーム開始時は場札が空（山札から場札をめくらない）でも問題なく始まる。
+            state = new_game(players, seed=seed)
+            self.assertEqual(state.table, [])
+            self.assertEqual(state.total, 0)
+            chooser = random.Random(seed * 1000 + players)
+            moves = 0
+            while not is_game_over(state):
+                actions = legal_actions(state)
+                self.assertTrue(actions)
+                state = apply(state, chooser.choice(actions))
+                moves += 1
+                self.assertLess(moves, MAX_MOVES, f"players={players} seed={seed} が終わらない")
+            self.assertEqual(state.phase, "game_over")
+        finally:
+            engine.start_round = original
+
+    def test_round_continuation_keeps_cards_and_sum_zero(self):
+        for players in range(2, 8):
+            for seed in range(1, 6):
+                with self.subTest(players=players, seed=seed):
+                    self._play(players, seed)
+
+
 if __name__ == "__main__":
     unittest.main()

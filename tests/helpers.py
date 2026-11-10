@@ -76,11 +76,11 @@ def make_state(
 
 
 def start_round_with_draws(draws: list[Card], num_players: int = 3, dealer: int = 0) -> GameState:
-    """``draws`` の順に山札から引かれる状態を作ってラウンド開始する。
+    """``draws`` の順に手札を3枚ずつ配って、ラウンドを開始した状態を作る。
 
-    山札は末尾から pop されるので、逆順にして渡す。
-    山札が尽きるまでの補充は行わないため、手札は3枚ずつ、場札は空の状態から始める。
-    初期場札（最初の数字カード）を場札に積んでから、ラウンドを開始する。
+    山札は末尾から pop されるので、逆順にして渡す。手札に使わなかった残りは
+    そのまま山札として残る。ラウンド開始時に山札から場札をめくることはないため、
+    場札は空・合計は 0 で始まる。
     """
     players = [PlayerState(seat=i, chips=STARTING_CHIPS, hand=[], alive=True) for i in range(num_players)]
     deck = list(reversed(draws))
@@ -104,8 +104,7 @@ def start_round_with_draws(draws: list[Card], num_players: int = 3, dealer: int 
         events=[],
         rng=NoShuffleRandom(0),
     )
-    # 配布なしのラウンド開始（合計0・手番はディーラー本人）を行い、
-    # 初期場札をめくる（_begin_round 内で行う）。
+    # ラウンド開始（配布なし）: 合計 0・場札は空のまま・手番はディーラー本人。
     _begin_round(state, deal=False)
     return state
 

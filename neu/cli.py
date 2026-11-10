@@ -76,7 +76,7 @@ def print_status(state: GameState) -> None:
         f"ラウンド {state.round_number} / 手番: 席{player.seat} (あなた) / "
         f"向き: {DIRECTION_LABEL[state.direction]}"
     )
-    field_label = state.table[-1].id if state.table else "-"
+    field_label = state.table[-1].id if state.table else "なし"
     print(
         f"場の合計: {state.total}  (場札トップ: {field_label})  "
         f"山札: {len(state.deck)}枚 / 場札: {len(state.table)}枚"

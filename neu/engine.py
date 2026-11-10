@@ -36,11 +36,9 @@ FIRST_TURN_IS_DEALER = True
 # 安全なカードが見つからずに連鎖でラウンド負けが続く場合の上限（保険）。
 MAX_LOSS_CHAIN = 16
 # 場札を山札へ戻すとき（山札が尽きたとき）、場札の一番上のカードを残すか（仮置き）。
-# True なら「直前に出したカード、またはラウンド開始時にめくった初期場札」を残し、
-# それ以外をシャッフルして新しい山札にする。False なら場札の全部をシャッフルする。
+# True なら「直前に出したカード」を残し、それ以外をシャッフルして新しい山札にする。
+# False なら場札の全部をシャッフルする。
 KEEP_TOP_ON_RESHUFFLE = True
-# ゲーム開始時に初期場札をめくるか（True）。False なら合計 0 からスタートする。
-GAME_START_FLIPS_INITIAL_CARD = True
 
 # (カードID, kind, value, 枚数)
 # kind: "number"（通常の数字）, "hundred"（n101）, "pass", "turn", "shot", "double"
@@ -219,18 +217,25 @@ def next_alive(state: GameState, seat: int, direction: int) -> int:
 
 
 def _draw(state: GameState) -> Optional[Card]:
-    """山札から1枚引く。山札が切れたら場札をシャッフルして再利用する。"""
+    """山札から1枚引く。山札が切れたら場札をシャッフルして再利用する。
+
+    引けるカードがなければ ``None`` を返す（山札も場札も空のとき。
+    場札が1枚だけのときは ``KEEP_TOP_ON_RESHUFFLE`` でその1枚を残すため引けない）。
+    """
     if not state.deck:
         if not state.table:
             return None
         if KEEP_TOP_ON_RESHUFFLE:
-            # 場札の一番上（直前に出したカード or 初期場札）は残し、それ以外をシャッフルする。
+            # 場札の一番上（直前に出したカード）は残し、それ以外をシャッフルして山札にする。
             state.deck = state.table[:-1]
             state.table = [state.table[-1]]
         else:
             state.deck = list(state.table)
             state.table = []
         state.rng.shuffle(state.deck)
+        if not state.deck:
+            # 場札をシャッフルしても山札が空のままのとき（場札が1枚など）は引けない。
+            return None
     return state.deck.pop()
 
 
@@ -241,24 +246,6 @@ def _refill(state: GameState, player: PlayerState) -> None:
         if card is None:
             break
         player.hand.append(card)
-
-
-def _flip_initial_field_card(state: GameState) -> None:
-    """山札の上から数字カード（n101 以外）が出るまで 1 枚ずつめくる。
-
-    めくったカードはすべて場札の山（``table``）の一番上に積む。
-    最後に出た数字カードが一番上になる（これが新しい初期場札で、合計はそのカードで初期化される）。
-    """
-    while True:
-        card = _draw(state)
-        if card is None:
-            raise NeuError("初期場札を引けませんでした")
-        if card.kind == "number":
-            state.table.append(card)
-            state.total = card.value
-            return
-        # n101 と指示カードは場札に積んでやり直し（次の数字が出るまで）
-        state.table.append(card)
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +310,10 @@ def new_game(
 def _begin_round(state: GameState, *, deal: bool) -> None:
     """ラウンド開始の共通処理。
 
-    ``deal=True`` のときだけ山札をシャッフルして生存者に配る（ゲーム開始用）。
-    ``deal=False`` のときはカードを回収・シャッフル・再配布しない（ラウンド継続用。
-    ラウンド負け後の次ラウンドなど）。
+    ``deal=True`` のときだけ全カードを回収してシャッフルし、生存者に3枚ずつ配る
+    （ゲーム開始用。場札は空で始める）。``deal=False`` のときはカード（山札・場札・
+    手札）には一切触らず、合計を 0 に戻すだけ（ラウンド継続用。ラウンド負け後の
+    次ラウンドなど）。どちらの場合も、山札から場札をめくることはしない。
     """
     if state.phase != "playing":
         raise NeuError("ゲームは終了しています")
@@ -336,9 +324,11 @@ def _begin_round(state: GameState, *, deal: bool) -> None:
 
     if deal:
         # ゲーム開始時だけ: 全カードをシャッフルして生存者に3枚ずつ配る。
+        # 場札は空のまま（山札から場札をめくらない）。
         gathered: list[Card] = []
         for player in state.players:
             gathered.extend(player.hand)
+            player.hand = []
         gathered.extend(state.deck)
         gathered.extend(state.table)
         state.deck = gathered
@@ -351,13 +341,8 @@ def _begin_round(state: GameState, *, deal: bool) -> None:
                     raise NeuError("配布できるカードが足りません")
                 player.hand.append(card)
 
-    if not deal:
-        # ラウンド継続: カードは回収しない。合計を 0 に戻す（初期場札をめくれば上書きされる）。
-        state.total = 0
-
-    # 初期場札をめくる（ゲーム開始時も新ラウンドの継続時も。False なら合計 0 からスタート）。
-    if GAME_START_FLIPS_INITIAL_CARD:
-        _flip_initial_field_card(state)  # 初期場札をめくって合計を初期化する
+    # 合計を 0 に戻す。山札・場札・手札はここ（上の配布）以外では触らない。
+    state.total = 0
 
     if deal:
         # ゲーム開始時は向きを時計回りにリセットする。
@@ -369,10 +354,9 @@ def _begin_round(state: GameState, *, deal: bool) -> None:
     )
     state.cards_remaining = 1
 
-    field_label = state.table[-1].id if state.table else "-"
     state.events.append(
         f"ラウンド{state.round_number} 開始: ディーラー席{state.dealer} / "
-        f"場札 {field_label} (合計 {state.total}) / 手番 席{state.current_player}"
+        f"合計 {state.total} / 手番 席{state.current_player}"
     )
 
     # 最初の手番の人も、「出せるカードが1枚もない」ならこのラウンドの負け。
@@ -393,11 +377,12 @@ def _begin_round(state: GameState, *, deal: bool) -> None:
 def start_round(state: GameState) -> GameState:
     """次のラウンドを開始する（状態を直接更新する）。
 
-    カードの回収・シャッフル・再配布・山札からのめくりは一切しない（ラウンド負け後には行わない）。
-    合計を 0 に戻すだけ。向きは引き継ぎ、最初の手番を決める（ディーラー本人）。
+    カードの回収・シャッフル・再配布・山札からのめくりは一切しない。
+    変わるのは「合計を 0 に戻すこと」と「最初の手番（ディーラー本人 ＝ 前ラウンドの
+    負けた人）を決めること」だけ。場札・山札・手札はそのまま積み上がった状態で
+    引き継ぎ、回る向きもリセットしない。
 
-    ``new_game``（配る・めくる）と、ラウンド継続（配らない・めくらない）を区別するために、
-    配布・めくりを行うのは ``new_game`` 側だけ。
+    ゲーム開始時の配布（全カードをシャッフルして3枚ずつ配る）は ``new_game`` 側だけ。
     """
     _begin_round(state, deal=False)
     return state
@@ -555,9 +540,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
 
     # --- 数字カード -----------------------------------------------------
     if card.is_number:
-        # 101 超えのカードは legal_actions / _validate で出せないため、
-        # 101 超えのカードは legal_actions / _validate で出せないため、ここでは必ず
-        # 合計が LOSING_LIMIT 以下になる（バースト処理は不要）。
+        # 101 超えのカードは legal_actions / _validate で出せないため、ここでは必ず合計が LOSING_LIMIT 以下になる（バースト処理は不要）。
         if card.kind == "hundred":
             state.total = LOSING_LIMIT
         else:
