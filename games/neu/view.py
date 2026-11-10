@@ -16,6 +16,7 @@ from neu.engine import (
     apply,
     legal_actions,
     next_alive,
+    projected_total,
 )
 
 from .cards import card_to_view
@@ -25,27 +26,22 @@ DIRECTION_LABELS = {1: "時計回り", -1: "反時計回り"}
 
 def _static_after_sum(state: GameState, card: Card) -> int:
     """手番でないときなど、試し打ちできない場合の合計。"""
-    if card.kind == "hundred":
-        return LOSING_LIMIT
-    if card.kind == "number":
-        return state.total + card.value
-    return state.total
+    return projected_total(state, card)
 
 
 def _after_sum(state: GameState, card: Card, action: Action | None) -> int:
-    """カードを出した後の合計。バースト時はラウンドリセット後の値ではなく実際の合計を返す。"""
+    """カードを出した後の合計。ラウンドが続く場合はその値、負けて次ラウンドになった場合は試し打ち用の値。"""
     if action is None:
         return _static_after_sum(state, card)
     try:
         after = apply(state, action)
     except Exception:
         return _static_after_sum(state, card)
-    # バーストするとエンジンは即座に次のラウンドを始めるため、round が変わる。
-    # UI に「101 を超えた」と見せるため、リセット後の合計ではなく実際の合計を返す。
+    # 負けて次ラウンドが始まった場合も、リセット後の合計ではなく実際の合計を返す。
     if card.is_number and (
         after.round_number != state.round_number or after.phase == "game_over"
     ):
-        return LOSING_LIMIT if card.kind == "hundred" else state.total + card.value
+        return projected_total(state, card)
     return after.total
 
 
@@ -120,8 +116,7 @@ def build_view(game: Any, player_id: str) -> dict[str, Any]:
     winner_id = (
         game.player_id_at(state.winner) if state.winner is not None else None
     )
-    field_card = card_to_view(state.field_card)
-    discard_top = card_to_view(state.discard[-1]) if state.discard else None
+    table_top = state.table[-1] if state.table else None
 
     result = game.result
     view: dict[str, Any] = {
@@ -138,14 +133,12 @@ def build_view(game: Any, player_id: str) -> dict[str, Any]:
         "nextPlayerId": next_player_id,
         "cardsRemaining": state.cards_remaining,
         "cards_remaining": state.cards_remaining,
-        "fieldCard": field_card,
-        "field_card": field_card,
+        "tableTop": card_to_view(table_top),
+        "table_top": card_to_view(table_top),
         "deckCount": len(state.deck),
         "deck_count": len(state.deck),
-        "discardCount": len(state.discard),
-        "discard_count": len(state.discard),
-        "discardTop": discard_top,
-        "discard_top": discard_top,
+        "tableCount": len(state.table),
+        "table_count": len(state.table),
         "winner": state.winner,
         "winnerId": winner_id,
         "winnerName": game.name_at(state.winner) if state.winner is not None else None,

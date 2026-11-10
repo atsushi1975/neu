@@ -5,6 +5,7 @@ import unittest
 from neu.engine import (
     Action,
     DoubleNotAllowed,
+    IllegalAction,
     InvalidTarget,
     apply,
     legal_actions,
@@ -30,18 +31,20 @@ class DoubleTest(unittest.TestCase):
         self.assertEqual(after.current_player, 1)
         self.assertEqual(after.cards_remaining, 1)
 
-    def test_first_card_over_101_loses_immediately(self):
+    def test_first_card_over_101_is_not_playable(self):
         state = make_state(
             [cards("n5", "n6", "pass")] + [cards("n1", "n1", "n1")] * 2,
             total=100,
             remaining=2,
             chips=[3, 3, 3],
         )
-        after = apply(state, Action(0, 0))
-        self.assertEqual(after.players[0].chips, 2)
-        self.assertTrue(after.players[0].alive)
-        # 2枚目 (n6) は出されていない
-        self.assertFalse(any("n6" in event for event in after.events))
+        # n5（合計105）は101超えのため、DOUBLE 中でも出せない（1枚目は DOUBLE 不可・かつ101超え）。
+        # 出せるのは PASS だけなので、DOUBLE 中としては実質出せる手がない状況。
+        self.assertEqual([a.card_index for a in legal_actions(state)], [2])
+        with self.assertRaises(IllegalAction):
+            apply(state, Action(0, 0))
+        self.assertEqual(state.players[0].chips, 3)
+        self.assertEqual(state.round_results, [])
 
     def test_first_pass_transfers_double_duty(self):
         state = make_state(

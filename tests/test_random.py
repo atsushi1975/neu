@@ -21,8 +21,7 @@ class RandomPlayTest(unittest.TestCase):
         total_cards = (
             sum(len(p.hand) for p in state.players)
             + len(state.deck)
-            + len(state.discard)
-            + (1 if state.field_card else 0)
+            + len(state.table)
         )
         self.assertEqual(total_cards, 58)
 
@@ -40,7 +39,6 @@ class RandomPlayTest(unittest.TestCase):
                 safe_actions(state),
                 f"seat {state.current_player} に安全な手がありません",
             )
-
     def _play(self, players, seed, max_moves=MAX_MOVES):
         state = new_game(players, seed=seed)
         chooser = random.Random(seed * 1000 + players)

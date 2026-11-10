@@ -40,7 +40,7 @@ def make_state(
     direction: int = 1,
     chips: Optional[list[int]] = None,
     deck: Optional[list[Card]] = None,
-    discard: Optional[list[Card]] = None,
+    table: Optional[list[Card]] = None,
     dealer: int = 0,
     round_number: int = 1,
     events: Optional[list[str]] = None,
@@ -61,8 +61,7 @@ def make_state(
     return GameState(
         players=players,
         deck=list(deck) if deck is not None else filler(),
-        discard=list(discard) if discard is not None else [],
-        field_card=None,
+        table=list(table) if table is not None else [],
         total=total,
         direction=direction,
         dealer=dealer,
@@ -77,16 +76,23 @@ def make_state(
 
 
 def start_round_with_draws(draws: list[Card], num_players: int = 3, dealer: int = 0) -> GameState:
-    """``draws`` の順に山札から引かれる状態を作って start_round する。
+    """``draws`` の順に山札から引かれる状態を作ってラウンド開始する。
 
     山札は末尾から pop されるので、逆順にして渡す。
+    山札が尽きるまでの補充は行わないため、手札は3枚ずつ、場札は空の状態から始める。
+    初期場札（最初の数字カード）を場札に積んでから、ラウンドを開始する。
     """
-    players = [PlayerState(seat=i) for i in range(num_players)]
+    players = [PlayerState(seat=i, chips=STARTING_CHIPS, hand=[], alive=True) for i in range(num_players)]
+    deck = list(reversed(draws))
+    for player in players:
+        for _ in range(3):
+            player.hand.append(deck.pop())
+    from neu.engine import _begin_round
+
     state = GameState(
         players=players,
-        deck=list(reversed(draws)),
-        discard=[],
-        field_card=None,
+        deck=deck,
+        table=[],
         total=0,
         direction=1,
         dealer=dealer,
@@ -98,9 +104,9 @@ def start_round_with_draws(draws: list[Card], num_players: int = 3, dealer: int 
         events=[],
         rng=NoShuffleRandom(0),
     )
-    from neu.engine import start_round
-
-    start_round(state)
+    # 配布なしのラウンド開始（合計0・手番はディーラー本人）を行い、
+    # 初期場札をめくる（_begin_round 内で行う）。
+    _begin_round(state, deal=False)
     return state
 
 

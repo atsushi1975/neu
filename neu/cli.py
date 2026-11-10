@@ -20,10 +20,12 @@ from .engine import (
     GameState,
     IllegalAction,
     InvalidSetup,
+    LOSING_LIMIT,
     apply,
     is_game_over,
     legal_actions,
     new_game,
+    projected_total,
 )
 
 HUMAN_SEAT = 0
@@ -46,14 +48,6 @@ def describe_card(card: Card) -> str:
         "shot": "SHOT (次の手番を指名)",
         "double": "DOUBLE (次の人は2枚)",
     }.get(card.kind, card.kind)
-
-
-def projected_total(total: int, card: Card) -> int:
-    if card.kind == "hundred":
-        return 101
-    if card.kind == "number":
-        return total + card.value
-    return total
 
 
 def chips_line(state: GameState) -> str:
@@ -82,10 +76,10 @@ def print_status(state: GameState) -> None:
         f"ラウンド {state.round_number} / 手番: 席{player.seat} (あなた) / "
         f"向き: {DIRECTION_LABEL[state.direction]}"
     )
-    field_label = state.field_card.id if state.field_card else "-"
+    field_label = state.table[-1].id if state.table else "-"
     print(
-        f"場の合計: {state.total}  (場札: {field_label})  "
-        f"山札: {len(state.deck)}枚 / 捨て札: {len(state.discard)}枚"
+        f"場の合計: {state.total}  (場札トップ: {field_label})  "
+        f"山札: {len(state.deck)}枚 / 場札: {len(state.table)}枚"
     )
     print(f"チップ: {chips_line(state)}")
 
@@ -99,12 +93,12 @@ def print_status(state: GameState) -> None:
         p.seat for p in state.players if p.alive and p.seat != player.seat
     ]
     for index, card in enumerate(player.hand):
-        total = projected_total(state.total, card)
+        total = projected_total(state, card)
         note = describe_card(card)
         if card.kind == "double" and state.cards_remaining >= 2:
             note += "  ※DOUBLE中は出せません"
-        elif total > 101:
-            note += f"  ⚠ 出すと合計 {total} で101超え（ラウンド負け）"
+        elif card.is_number and total > LOSING_LIMIT:
+            note += f"  ⚠ 合計 {total} は101超えのため、このカードは出せません"
         elif card.is_number:
             note += f"  → 合計 {total}"
         if card.kind == "shot":

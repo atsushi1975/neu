@@ -31,8 +31,16 @@ HAND_SIZE = 3
 # 整数が入っていればその席に固定する（テスト・CLI の再現用）。
 INITIAL_DEALER: Optional[int] = None
 LOSING_LIMIT = 101
+# 最初の手番はディーラー本人にするか（True）。False なら進行方向の次の生存者の手番から。
+FIRST_TURN_IS_DEALER = True
 # 安全なカードが見つからずに連鎖でラウンド負けが続く場合の上限（保険）。
 MAX_LOSS_CHAIN = 16
+# 場札を山札へ戻すとき（山札が尽きたとき）、場札の一番上のカードを残すか（仮置き）。
+# True なら「直前に出したカード、またはラウンド開始時にめくった初期場札」を残し、
+# それ以外をシャッフルして新しい山札にする。False なら場札の全部をシャッフルする。
+KEEP_TOP_ON_RESHUFFLE = True
+# ゲーム開始時に初期場札をめくるか（True）。False なら合計 0 からスタートする。
+GAME_START_FLIPS_INITIAL_CARD = True
 
 # (カードID, kind, value, 枚数)
 # kind: "number"（通常の数字）, "hundred"（n101）, "pass", "turn", "shot", "double"
@@ -156,8 +164,7 @@ class PlayerState:
 class GameState:
     players: list[PlayerState]
     deck: list[Card]
-    discard: list[Card]
-    field_card: Optional[Card]
+    table: list[Card]  # 場札の山（積み上がる側が末尾 = 一番上）
     total: int  # 場の合計（API では "sum"）
     direction: int  # +1 = 時計回り（席番号増加）, -1 = 反時計回り
     dealer: int
@@ -212,12 +219,17 @@ def next_alive(state: GameState, seat: int, direction: int) -> int:
 
 
 def _draw(state: GameState) -> Optional[Card]:
-    """山札から1枚引く。山札が切れていたら捨て札をシャッフルして再利用する。"""
+    """山札から1枚引く。山札が切れたら場札をシャッフルして再利用する。"""
     if not state.deck:
-        if not state.discard:
+        if not state.table:
             return None
-        state.deck = state.discard
-        state.discard = []
+        if KEEP_TOP_ON_RESHUFFLE:
+            # 場札の一番上（直前に出したカード or 初期場札）は残し、それ以外をシャッフルする。
+            state.deck = state.table[:-1]
+            state.table = [state.table[-1]]
+        else:
+            state.deck = list(state.table)
+            state.table = []
         state.rng.shuffle(state.deck)
     return state.deck.pop()
 
@@ -229,6 +241,24 @@ def _refill(state: GameState, player: PlayerState) -> None:
         if card is None:
             break
         player.hand.append(card)
+
+
+def _flip_initial_field_card(state: GameState) -> None:
+    """山札の上から数字カード（n101 以外）が出るまで 1 枚ずつめくる。
+
+    めくったカードはすべて場札の山（``table``）の一番上に積む。
+    最後に出た数字カードが一番上になる（これが新しい初期場札で、合計はそのカードで初期化される）。
+    """
+    while True:
+        card = _draw(state)
+        if card is None:
+            raise NeuError("初期場札を引けませんでした")
+        if card.kind == "number":
+            state.table.append(card)
+            state.total = card.value
+            return
+        # n101 と指示カードは場札に積んでやり直し（次の数字が出るまで）
+        state.table.append(card)
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +290,7 @@ def new_game(
     state = GameState(
         players=players,
         deck=build_deck(),
-        discard=[],
-        field_card=None,
+        table=[],
         total=0,
         direction=1,
         dealer=0,
@@ -287,15 +316,16 @@ def new_game(
     state.round_number = 0
     state.events = []
     state.round_results = []
-    start_round(state)
+    _begin_round(state, deal=True)
     return state
 
 
-def start_round(state: GameState) -> GameState:
-    """ラウンドを開始する（状態を直接更新する）。
+def _begin_round(state: GameState, *, deal: bool) -> None:
+    """ラウンド開始の共通処理。
 
-    全カードを回収してシャッフルし、生存者に3枚ずつ配る。
-    初期場札をめくり、最初の手番を決める。``new_game`` とラウンド終了時に呼ばれる。
+    ``deal=True`` のときだけ山札をシャッフルして生存者に配る（ゲーム開始用）。
+    ``deal=False`` のときはカードを回収・シャッフル・再配布しない（ラウンド継続用。
+    ラウンド負け後の次ラウンドなど）。
     """
     if state.phase != "playing":
         raise NeuError("ゲームは終了しています")
@@ -304,65 +334,72 @@ def start_round(state: GameState) -> GameState:
     if not survivors:
         raise NeuError("生存プレイヤーがいません")
 
-    # 1. すべてのカードを回収する（脱落者の手札も含む）
-    gathered: list[Card] = []
-    for player in state.players:
-        gathered.extend(player.hand)
-        player.hand = []
-    gathered.extend(state.deck)
-    gathered.extend(state.discard)
-    if state.field_card is not None:
-        gathered.append(state.field_card)
-    state.deck = gathered
-    state.discard = []
-    state.field_card = None
+    if deal:
+        # ゲーム開始時だけ: 全カードをシャッフルして生存者に3枚ずつ配る。
+        gathered: list[Card] = []
+        for player in state.players:
+            gathered.extend(player.hand)
+        gathered.extend(state.deck)
+        gathered.extend(state.table)
+        state.deck = gathered
+        state.table = []
+        state.rng.shuffle(state.deck)
+        for player in survivors:
+            for _ in range(HAND_SIZE):
+                card = _draw(state)
+                if card is None:  # 58枚あるので通常は起こらない
+                    raise NeuError("配布できるカードが足りません")
+                player.hand.append(card)
 
-    # 2. シャッフルして配る
-    state.rng.shuffle(state.deck)
-    for player in survivors:
-        for _ in range(HAND_SIZE):
-            card = _draw(state)
-            if card is None:  # 58枚あるので通常は起こらない
-                raise NeuError("配布できるカードが足りません")
-            player.hand.append(card)
+    if not deal:
+        # ラウンド継続: カードは回収しない。合計を 0 に戻す（初期場札をめくれば上書きされる）。
+        state.total = 0
 
-    # 3. 初期場札: 数字カード（n101 を除く）が出るまでめくる
-    while True:
-        card = _draw(state)
-        if card is None:
-            raise NeuError("初期場札を引けませんでした")
-        if card.kind == "number":
-            state.field_card = card
-            state.total = card.value
-            break
-        # n101 と指示カードは捨て札へ
-        state.discard.append(card)
+    # 初期場札をめくる（ゲーム開始時も新ラウンドの継続時も。False なら合計 0 からスタート）。
+    if GAME_START_FLIPS_INITIAL_CARD:
+        _flip_initial_field_card(state)  # 初期場札をめくって合計を初期化する
 
-    # 4. 向きをリセットし、最初の手番を決める（ディーラー本人。修正2）
-    state.direction = 1
+    if deal:
+        # ゲーム開始時は向きを時計回りにリセットする。
+        state.direction = 1
+
     state.round_number += 1
-    state.current_player = state.dealer
+    state.current_player = (
+        state.dealer if FIRST_TURN_IS_DEALER else next_alive(state, state.dealer, state.direction)
+    )
     state.cards_remaining = 1
 
-    field_label = state.field_card.id if state.field_card else "-"
+    field_label = state.table[-1].id if state.table else "-"
     state.events.append(
         f"ラウンド{state.round_number} 開始: ディーラー席{state.dealer} / "
         f"場札 {field_label} (合計 {state.total}) / 手番 席{state.current_player}"
     )
 
-    # 最初の手番の人も、「出せるカードがすべて101超え」ならこのラウンドの負け。
+    # 最初の手番の人も、「出せるカードが1枚もない」ならこのラウンドの負け。
     # 負けた場合は _lose_round → start_round が呼ばれるため、ここは while で連鎖を処理する。
     # チップが減るので必ず終了するが、保険として上限ガードを入れる。
     losses = 0
     while (
         state.phase == "playing"
         and state.current_player is not None
-        and not _has_safe_action(state)
+        and not legal_actions(state)
     ):
         if losses >= MAX_LOSS_CHAIN:
-            raise NeuError("出せるカードがすべて101超えのため、ラウンド負けの連鎖が続いています")
+            raise NeuError("出せるカードがすべて101を超えるため、ラウンド負けの連鎖が続いています")
         losses += 1
-        _lose_round(state, state.players[state.current_player], reason="no_safe_card")
+        _lose_round(state, state.players[state.current_player], reason="no_playable_card")
+
+
+def start_round(state: GameState) -> GameState:
+    """次のラウンドを開始する（状態を直接更新する）。
+
+    カードの回収・シャッフル・再配布・山札からのめくりは一切しない（ラウンド負け後には行わない）。
+    合計を 0 に戻すだけ。向きは引き継ぎ、最初の手番を決める（ディーラー本人）。
+
+    ``new_game``（配る・めくる）と、ラウンド継続（配らない・めくらない）を区別するために、
+    配布・めくりを行うのは ``new_game`` 側だけ。
+    """
+    _begin_round(state, deal=False)
     return state
 
 
@@ -384,6 +421,11 @@ def legal_actions(state: GameState) -> list[Action]:
         if card.kind == "double" and state.cards_remaining >= 2:
             continue
 
+        # 合計が 101 を超える数字カードは出せない（出せるカードが無ければ、この人は負け）。
+        # n101 は合計が 101 になるだけなので、この判定を通る（101 は 101 を超えない）。
+        if card.is_number and projected_total(state, card) > LOSING_LIMIT:
+            continue
+
         if card.kind == "shot":
             for target in range(len(state.players)):
                 if target == player.seat:
@@ -396,8 +438,8 @@ def legal_actions(state: GameState) -> list[Action]:
     return actions
 
 
-def _projected_total(state: GameState, card: Card) -> int:
-    """カードを出した後の合計を計算する（バースト判定と安全判定で共用する）。"""
+def projected_total(state: GameState, card: Card) -> int:
+    """カードを出した後の合計を計算する（合法手・安全な手の判定で共用する）。"""
     if card.kind == "hundred":
         return LOSING_LIMIT
     if card.kind == "number":
@@ -419,7 +461,7 @@ def safe_actions(state: GameState) -> list[Action]:
     safe: list[Action] = []
     for action in legal_actions(state):
         card = player.hand[action.card_index]
-        if _projected_total(state, card) > LOSING_LIMIT:
+        if projected_total(state, card) > LOSING_LIMIT:
             continue
         safe.append(action)
     return safe
@@ -430,17 +472,17 @@ def _has_safe_action(state: GameState) -> bool:
     return bool(safe_actions(state))
 
 
-def _check_no_safe_card(state: GameState) -> None:
-    """現在の手番の人が安全なカードを持てない場合、そのラウンドの負けを宣言する。
+def _check_no_playable_card(state: GameState) -> None:
+    """現在の手番の人が出せる合法手を1つも持っていない場合、そのラウンドの負けを宣言する。
 
-    判定は「次に出す人が決まった直後」に行う。安全なカードがなければ
-    :func:`_lose_round`（``reason="no_safe_card"``）でラウンドを負ける。
+    判定は「次に出す人が決まった直後」に行う。出せるカードが無ければ
+    :func:`_lose_round`（``reason="no_playable_card"``）でラウンドを負ける。
     """
     if state.phase != "playing" or state.current_player is None:
         return
-    if _has_safe_action(state):
+    if legal_actions(state):
         return
-    _lose_round(state, state.players[state.current_player], reason="no_safe_card")
+    _lose_round(state, state.players[state.current_player], reason="no_playable_card")
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +509,11 @@ def _validate(state: GameState, action: Action) -> Card:
 
     if card.kind == "double" and state.cards_remaining >= 2:
         raise DoubleNotAllowed("DOUBLE 中の1枚目には DOUBLE を出せません")
+
+    if card.is_number and projected_total(state, card) > LOSING_LIMIT:
+        raise IllegalAction(
+            f"合計 {projected_total(state, card)} は 101 を超えるため、このカードは出せません"
+        )
 
     if card.kind == "shot":
         target = action.target
@@ -499,7 +546,8 @@ def apply(state: GameState, action: Action) -> GameState:
 def _apply_inplace(state: GameState, action: Action) -> None:
     player = state.players[action.player]
     card = player.hand.pop(action.card_index)
-    state.discard.append(card)
+    # 出したカードは場札（table）の一番上に積む
+    state.table.append(card)
     # 1枚出すたびに手札を3枚に戻す（DOUBLE の途中でも同様）
     _refill(state, player)
 
@@ -507,19 +555,13 @@ def _apply_inplace(state: GameState, action: Action) -> None:
 
     # --- 数字カード -----------------------------------------------------
     if card.is_number:
-        sum_after = _projected_total(state, card)
+        # 101 超えのカードは legal_actions / _validate で出せないため、
+        # 101 超えのカードは legal_actions / _validate で出せないため、ここでは必ず
+        # 合計が LOSING_LIMIT 以下になる（バースト処理は不要）。
         if card.kind == "hundred":
             state.total = LOSING_LIMIT
         else:
             state.total += card.value
-
-        if sum_after > LOSING_LIMIT:
-            state.events.append(
-                f"席{player.seat} が {card.id} を出して合計 {state.total} "
-                f"→ 101超えでラウンド負け"
-            )
-            _lose_round(state, player, reason="bust", card=card, sum_after=sum_after)
-            return
 
         state.events.append(f"席{player.seat} が {card.id} を出した (合計 {state.total})")
 
@@ -529,7 +571,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
             _end_turn(state, next_alive(state, player.seat, state.direction), 1)
         # 手番が次の人へ移った、または同じ人が残り枚数を出すべきになった直後なので、
         # 安全なカードが無いか判定する。
-        _check_no_safe_card(state)
+        _check_no_playable_card(state)
         return
 
     # --- 指示カード -----------------------------------------------------
@@ -537,7 +579,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
         state.events.append(f"席{player.seat} が PASS (合計 {state.total} のまま)")
         # 必要枚数が残っている場合は、その義務が次の人へそのまま移る
         _end_turn(state, next_alive(state, player.seat, state.direction), remaining_before)
-        _check_no_safe_card(state)
+        _check_no_playable_card(state)
         return
 
     if card.kind == "turn":
@@ -549,7 +591,7 @@ def _apply_inplace(state: GameState, action: Action) -> None:
             next_alive(state, player.seat, state.direction),
             remaining_before,
         )
-        _check_no_safe_card(state)
+        _check_no_playable_card(state)
         return
 
     if card.kind == "shot":
@@ -557,13 +599,13 @@ def _apply_inplace(state: GameState, action: Action) -> None:
         assert target is not None
         state.events.append(f"席{player.seat} が SHOT で席{target} を指名")
         _end_turn(state, target, remaining_before)
-        _check_no_safe_card(state)
+        _check_no_playable_card(state)
         return
 
     if card.kind == "double":
         state.events.append(f"席{player.seat} が DOUBLE (次の手番は2枚)")
         _end_turn(state, next_alive(state, player.seat, state.direction), 2)
-        _check_no_safe_card(state)
+        _check_no_playable_card(state)
         return
 
     raise IllegalAction(f"未知のカード種別です: {card.kind}")
@@ -573,16 +615,22 @@ def _lose_round(
     state: GameState,
     loser: PlayerState,
     *,
-    reason: str = "bust",
+    reason: str = "no_playable_card",
     card: Optional[Card] = None,
     sum_after: Optional[int] = None,
 ) -> None:
     """ラウンドの負け処理。チップ減少・脱落・ゲーム終了・次ラウンド開始。
 
-    ``reason`` は ``"bust"``（カードを出した結果 101 超え）か
-    ``"no_safe_card"``（出せるカードがすべて 101 超えのため打てない）か。
+    ``reason`` は ``"no_playable_card"``（出せるカードがすべて 101 超えのため打てない）。
+    カードを出した結果 101 超えで負けることはもうない（出せないカード負けにする）。
+
+    次のラウンドへは、カードの回収・シャッフル・再配布をせずに継続処理
+    （``start_round``）で進む。他のプレイヤーの手札・山札・場札はそのまま引き継ぐ。
     """
     lost_round = state.round_number
+    lost_hand = (
+        [card_to_dict(c) for c in loser.hand] if reason == "no_playable_card" else None
+    )
     loser.chips -= 1
     if loser.chips <= 0:
         loser.chips = 0
@@ -590,8 +638,15 @@ def _lose_round(
         state.events.append(f"席{loser.seat} はチップを失って脱落した")
     else:
         state.events.append(f"席{loser.seat} はチップを1枚失った (残り {loser.chips}枚)")
-    if reason == "no_safe_card":
-        state.events.append(f"席{loser.seat} は出せるカードがすべて101を超えるためラウンド負け")
+
+    state.events.append(f"席{loser.seat} は出せるカードがすべて101を超えるためラウンド負け")
+
+    if not loser.alive:
+        # 脱落した手札は、場札（table）の一番下に入れる（仮置き: カード総数の保存用）。
+        # 一番上のカードは変えない。定数・コメントで仮置きと分かるようにしている。
+        for held_card in loser.hand:
+            state.table.insert(0, held_card)
+        loser.hand = []
 
     game_over = False
     winner_seat: Optional[int] = None
@@ -609,13 +664,14 @@ def _lose_round(
             "round": lost_round,
             "loser": loser.seat,
             "reason": reason,
-            "card_id": card.id if reason == "bust" and card is not None else None,
-            "sum_after": sum_after if reason == "bust" else None,
+            "card_id": None,
+            "sum_after": None,
+            "sum": state.total,
             "chips_left": loser.chips,
             "eliminated": not loser.alive,
             "game_over": game_over,
             "winner": winner_seat if game_over else None,
-            "hand": [card_to_dict(c) for c in loser.hand] if reason == "no_safe_card" else None,
+            "hand": lost_hand,
         }
     )
 
@@ -625,6 +681,7 @@ def _lose_round(
             state.dealer = loser.seat
         else:
             state.dealer = next_alive(state, loser.seat, state.direction)
+        # 次のラウンドへは、カードを回収せずに継続処理で始める。
         start_round(state)
 
 
@@ -649,7 +706,7 @@ def winner(state: GameState) -> Optional[int]:
 def view_for(state: GameState, seat: int) -> dict[str, Any]:
     """``seat`` 視点の公開情報を返す。
 
-    他人の手札は枚数のみ、山札・捨て札は枚数のみ（捨て札は一番上だけ公開）。
+    他人の手札は枚数のみ、山札・場札は枚数のみ（場札は一番上だけ公開）。
     自分自身の手札だけ中身を返す。
     """
     if not (0 <= seat < len(state.players)):
@@ -667,6 +724,7 @@ def view_for(state: GameState, seat: int) -> dict[str, Any]:
             entry["hand"] = [card_to_dict(card) for card in player.hand]
         players_view.append(entry)
 
+    table_top = state.table[-1] if state.table else None
     return {
         "viewer": seat,
         "phase": state.phase,
@@ -676,10 +734,12 @@ def view_for(state: GameState, seat: int) -> dict[str, Any]:
         "dealer": state.dealer,
         "current_player": state.current_player,
         "cards_remaining": state.cards_remaining,
-        "field_card": card_to_dict(state.field_card) if state.field_card else None,
+        "tableTop": card_to_dict(table_top) if table_top else None,
+        "table_top": card_to_dict(table_top) if table_top else None,
+        "deckCount": len(state.deck),
         "deck_count": len(state.deck),
-        "discard_count": len(state.discard),
-        "discard_top": card_to_dict(state.discard[-1]) if state.discard else None,
+        "tableCount": len(state.table),
+        "table_count": len(state.table),
         "winner": state.winner,
         "players": players_view,
         "events": list(state.events[-20:]),
@@ -718,8 +778,7 @@ def to_dict(state: GameState) -> dict[str, Any]:
             for player in state.players
         ],
         "deck": [card_to_dict(card) for card in state.deck],
-        "discard": [card_to_dict(card) for card in state.discard],
-        "field_card": card_to_dict(state.field_card) if state.field_card else None,
+        "table": [card_to_dict(card) for card in state.table],
         "sum": state.total,
         "direction": state.direction,
         "dealer": state.dealer,
@@ -756,11 +815,23 @@ def from_dict(data: dict[str, Any]) -> GameState:
     current_player = data.get("current_player")
     winner_seat = data.get("winner")
 
+    # 旧形式（field_card + discard）の JSON も読めるようにする。
+    # 場札は「捨て札（discard）＋ 初期場札（field_card。一番上）」として復元する。
+    raw_table = data.get("table")
+    if raw_table is None:
+        raw_discard = data.get("discard") or []
+        raw_field_card = data.get("field_card")
+        table_cards = [card_from_dict(card) for card in raw_discard]
+        if raw_field_card:
+            table_cards.append(card_from_dict(raw_field_card))
+        table = table_cards
+    else:
+        table = [card_from_dict(card) for card in raw_table]
+
     return GameState(
         players=players,
         deck=[card_from_dict(card) for card in data.get("deck", [])],
-        discard=[card_from_dict(card) for card in data.get("discard", [])],
-        field_card=card_from_dict(data["field_card"]) if data.get("field_card") else None,
+        table=table,
         total=int(data["sum"]),
         direction=int(data["direction"]),
         dealer=int(data["dealer"]),

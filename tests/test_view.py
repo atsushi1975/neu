@@ -34,13 +34,17 @@ class ViewTest(unittest.TestCase):
                     else:
                         self.assertNotIn("hand", entry)
 
-    def test_deck_and_discard_are_counts_only(self):
+    def test_deck_and_table_are_counts_only(self):
         state = new_game(4, seed=4)
         view = view_for(state, 0)
         self.assertNotIn("deck", view)
+        self.assertNotIn("table", view)
         self.assertNotIn("discard", view)
+        self.assertNotIn("field_card", view)
         self.assertEqual(view["deck_count"], len(state.deck))
-        self.assertEqual(view["discard_count"], len(state.discard))
+        self.assertEqual(view["deckCount"], len(state.deck))
+        self.assertEqual(view["table_count"], len(state.table))
+        self.assertEqual(view["tableCount"], len(state.table))
 
     def test_own_hand_is_visible_after_play(self):
         state = new_game(4, seed=5)
@@ -72,7 +76,7 @@ class ViewTest(unittest.TestCase):
             {
                 "round": 1,
                 "loser": 0,
-                "reason": "no_safe_card",
+                "reason": "no_playable_card",
                 "card_id": None,
                 "sum_after": None,
                 "chips_left": 2,
@@ -90,7 +94,7 @@ class ViewTest(unittest.TestCase):
         restored = from_dict(json.loads(json.dumps(data)))
         self.assertEqual(to_dict(restored), data)
         self.assertEqual(len(restored.round_results), 1)
-        self.assertEqual(restored.round_results[0]["reason"], "no_safe_card")
+        self.assertEqual(restored.round_results[0]["reason"], "no_playable_card")
 
     def test_from_dict_accepts_old_format_without_round_results(self):
         data = to_dict(new_game(3, seed=3))
@@ -98,6 +102,19 @@ class ViewTest(unittest.TestCase):
         data.pop("round_results")
         state = from_dict(data)
         self.assertEqual(state.round_results, [])
+
+    def test_from_dict_accepts_old_field_and_discard_format(self):
+        # 旧形式（field_card + discard）の JSON も読めるようにする。
+        data = to_dict(new_game(3, seed=3))
+        data["table"] = None
+        data.pop("table", None)
+        data["field_card"] = {"id": "n4", "kind": "number", "value": 4, "copy": 1}
+        data["discard"] = [
+            {"id": "pass", "kind": "pass", "value": 0, "copy": 1},
+        ]
+        state = from_dict(data)
+        self.assertEqual([c.id for c in state.table], ["pass", "n4"])
+        self.assertEqual(state.table[-1].value, 4)
 
     def test_roundtrip_continues_identically(self):
         state = new_game(4, seed=11)
