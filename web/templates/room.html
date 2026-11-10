@@ -63,14 +63,28 @@
       <p id="summary-note" class="summary-note"></p>
     </section>
 
-    <section id="players" class="players" aria-label="プレイヤー"></section>
-
-    <section class="field" aria-label="場札">
-      <div class="pile">
-        <h3>場札</h3>
-        <div id="table-card" class="pile-card"></div>
+    <section id="table" class="table" aria-label="プレイヤー">
+      <div id="table-center" class="table-center">
+        <p id="table-sum" class="table-sum">0</p>
+        <div id="table-pile" class="pile">
+          <div id="table-card" class="pile-card"></div>
+          <p id="table-count" class="pile-count"></p>
+        </div>
+        <div id="table-deck" class="pile">
+          <div class="deck-back"></div>
+          <p id="deck-count" class="deck-count"></p>
+        </div>
       </div>
-      <p id="deck-count" class="deck-count"></p>
+      <div id="players" class="table-seats" aria-label="プレイヤー"></div>
+      <div id="turn-arrow" class="turn-arrow" aria-hidden="true">
+        <svg id="turn-arc" class="turn-arc" viewBox="0 0 120 120">
+          <circle class="turn-track" cx="60" cy="60" r="40"></circle>
+          <g class="turn-hand">
+            <line x1="60" y1="60" x2="60" y2="22"></line>
+            <path d="M60,22 L50,38 L70,38 Z"></path>
+          </g>
+        </svg>
+      </div>
     </section>
 
     <div id="prompt" class="prompt" role="status" aria-live="polite"></div>
@@ -79,6 +93,9 @@
       <h3>自分の手札 <span id="hand-count" class="muted"></span></h3>
       <div id="hand" class="hand"></div>
       <p id="hand-help" class="hand-help">カードをタップして出せます。</p>
+      <div id="cancel-shot-wrap" class="naming-bar" hidden>
+        <button id="cancel-shot" type="button" class="ghost small">やめる</button>
+      </div>
     </section>
 
     <section class="log-wrap">
@@ -106,6 +123,7 @@
     </div>
   </div>
 
+  <script src="{{ url_for('static', filename='table-layout.js') }}"></script>
   <script src="{{ url_for('static', filename='room.js') }}"></script>
 </body>
 </html>

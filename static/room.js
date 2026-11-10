@@ -22,11 +22,17 @@ const els = {
   summarySum: document.getElementById("summary-sum"),
   summaryNote: document.getElementById("summary-note"),
   players: document.getElementById("players"),
+  tableSum: document.getElementById("table-sum"),
   tableCard: document.getElementById("table-card"),
+  tableCount: document.getElementById("table-count"),
+  tableDeck: document.getElementById("table-deck"),
+  turnArrow: document.getElementById("turn-arrow"),
   deckCount: document.getElementById("deck-count"),
   prompt: document.getElementById("prompt"),
   hand: document.getElementById("hand"),
   handCount: document.getElementById("hand-count"),
+  handHelp: document.getElementById("hand-help"),
+  cancelShot: document.getElementById("cancel-shot"),
   log: document.getElementById("log"),
   logToggle: document.getElementById("log-toggle"),
   toast: document.getElementById("last-round-toast"),
@@ -243,6 +249,7 @@ function renderGame() {
   renderLog();
   renderLastRound();
   renderResult();
+  renderTurnArrow();
 
   const myTurn = isMyTurn();
   if (myTurn && !wasMyTurn && navigator.vibrate) {
@@ -277,14 +284,40 @@ function renderSummary() {
 }
 
 function renderPlayers() {
-  els.players.replaceChildren();
+  const container = els.players;
+  const meSeat = gameState.me.seat;
+  const seatCount = gameState.players.length;
+  const rect = container.getBoundingClientRect();
+  const radiusX = Math.max(34, rect.width / 2 - 30);
+  const radiusY = Math.max(24, rect.height / 2 - 26);
+  const centerX = rect.width / 2;
+  const centerY = rect.height / 2;
+
+  container.replaceChildren();
+  const naming = isShotNaming();
+  const namingTargets = naming ? shotCard().targets || [] : [];
   for (const player of gameState.players) {
+    const position = TableLayout.seatPosition({
+      seat: player.seat,
+      mySeat: meSeat,
+      seatCount,
+      radiusX,
+      radiusY,
+      centerX,
+      centerY,
+    });
     const classes = ["player"];
     if (player.isCurrent && gameState.phase !== "finished") classes.push("current");
     if (player.isMe) classes.push("mine");
     if (!player.alive) classes.push("dead");
+    if (naming) {
+      if (namingTargets.includes(player.id)) classes.push("targetable");
+      else classes.push("dimmed");
+    }
     const tile = el("div", classes.join(" "));
     tile.dataset.playerId = player.id;
+    tile.style.left = `${position.x}px`;
+    tile.style.top = `${position.y}px`;
 
     const nameRow = el("div", "player-name-row");
     nameRow.append(el("span", "player-name", player.isMe ? "あなた" : player.name));
@@ -304,28 +337,50 @@ function renderPlayers() {
     backs.append(el("span", "mini-count", `${count}枚`));
     tile.append(backs);
 
-    if (player.isCurrent && gameState.phase !== "finished") {
-      tile.append(el("span", "player-tag turn", "手番"));
+    const isTurn = player.isCurrent && gameState.phase !== "finished";
+    if (isTurn) {
+      if (gameState.cardsRemaining >= 2) {
+        tile.append(el("span", "player-tag turn double", `あと${gameState.cardsRemaining}枚`));
+      } else {
+        tile.append(el("span", "player-tag turn", "手番"));
+      }
     }
     if (!player.alive) tile.append(el("span", "player-tag out", "脱落"));
 
-    els.players.append(tile);
+    container.append(tile);
   }
 }
 
-function fillPile(container, card, emptyText) {
+function fillPile(container, card, count, emptyText) {
   container.replaceChildren();
   if (!card) {
     container.append(el("p", "pile-empty", emptyText));
     return;
   }
-  container.append(makeCardFace(card));
+  const face = makeCardFace(card);
+  const copies = Math.min(2, Math.max(0, Number(count) - 1));
+  for (let index = 0; index < copies; index += 1) {
+    const clone = face.cloneNode(true);
+    clone.classList.add("pile-under");
+    clone.style.transform = `translate(${index === 0 ? -3 : 3}px, ${
+      index * 3
+    }px) rotate(${index === 0 ? -6 : 6}deg)`;
+    container.append(clone);
+  }
+  container.append(face);
   container.append(el("span", "pile-label", card.label || card.id));
 }
 
+function fillDeck(container) {
+  container.replaceChildren();
+  container.append(el("div", "deck-back"));
+}
+
 function renderField() {
-  fillPile(els.tableCard, gameState.tableTop, "なし");
-  els.deckCount.textContent = `山札 ${gameState.deckCount}枚 ／ 場札 ${gameState.tableCount}枚`;
+  fillPile(els.tableCard, gameState.tableTop, gameState.tableCount, "なし");
+  els.tableCount.textContent = `場札 ${gameState.tableCount}枚`;
+  fillDeck(els.tableDeck);
+  els.deckCount.textContent = `山札 ${gameState.deckCount}枚`;
 }
 
 function renderPrompt() {
@@ -346,9 +401,11 @@ function renderPrompt() {
       ? `「${shot.label}」で、誰を次の手番にしますか？`
       : "誰を次の手番にしますか？";
     els.prompt.classList.add("action");
+    if (els.cancelShot) els.cancelShot.hidden = false;
     return;
   }
 
+  if (els.cancelShot) els.cancelShot.hidden = true;
   if (myTurn) {
     els.prompt.textContent = gameState.cardsRemaining >= 2
       ? "あなたの番です（2枚出し）。手札をタップして出してください。"
@@ -602,6 +659,20 @@ function renderResult() {
   els.resultOverlay.hidden = false;
 }
 
+function renderTurnArrow() {
+  const arrow = els.turnArrow;
+  if (!arrow) return;
+  const arc = arrow.querySelector(".turn-hand") || arrow;
+  const direction = gameState.direction;
+  arc.classList.toggle("reverse", direction === -1);
+  if (lastArrowDir !== direction) {
+    lastArrowDir = direction;
+    arc.classList.remove("turn-anim");
+    void arc.offsetWidth;
+    arc.classList.add("turn-anim");
+  }
+}
+
 /* ------------------------------------------------------------------ 通信 */
 
 async function refresh() {
@@ -755,6 +826,24 @@ els.takeHost.addEventListener("click", async () => {
 els.logToggle.addEventListener("click", () => {
   logCollapsed = !logCollapsed;
   renderLog();
+});
+
+els.cancelShot.addEventListener("click", () => {
+  cancelShotNaming();
+});
+
+// 指名モード中は、卓上の目立った席（targets）をタップして指名して出す。
+// 空き部分や目立たない席をタップした場合は、指名モードをやめる。
+els.players.addEventListener("click", (event) => {
+  if (!shotNaming) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const tile = target ? target.closest(".player") : null;
+  const seatId = tile ? tile.dataset.playerId : null;
+  if (tile && tile.classList.contains("targetable")) {
+    void submitPlay(pendingShotCardId, seatId);
+    return;
+  }
+  cancelShotNaming();
 });
 
 els.copyRoom.addEventListener("click", async () => {

@@ -432,14 +432,9 @@ body.room {
   font-size: 0.74rem;
 }
 
-.players {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
-  gap: 6px;
-  margin: 10px 0;
-}
-
 .player {
+  position: absolute;
+  transform: translate(-50%, -50%);
   min-width: 0;
   padding: 7px 4px 6px;
   text-align: center;
@@ -561,35 +556,157 @@ body.room {
   color: var(--danger-soft);
 }
 
-.field {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  padding: 10px;
-  background: linear-gradient(180deg, var(--felt), #0a1628);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
+.player.dimmed {
+  opacity: 0.35;
+}
+
+.player.targetable {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 2px rgba(101, 214, 166, 0.65), 0 0 18px rgba(101, 214, 166, 0.35);
+}
+
+/* ---------------- 円形卓 ---------------- */
+
+.table {
+  position: relative;
+  width: min(92vw, 360px);
+  height: min(40vh, 300px);
+  min-height: 150px;
+  margin: 2px auto 0;
+}
+
+.table-seats {
+  position: absolute;
+  inset: 0;
+}
+
+.table-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.table-sum {
+  margin: 0;
+  color: var(--gold-soft);
+  font-size: clamp(2.4rem, 12vw, 3.6rem);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-sum.near-limit {
+  color: #ffb35c;
+  text-shadow: 0 0 22px rgba(255, 140, 60, 0.4);
+}
+
+#table-card,
+#table-deck {
+  pointer-events: auto;
 }
 
 .pile {
-  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.pile-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.deck-back {
+  width: 44px;
+  height: 62px;
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    45deg,
+    #31436b 0 3px,
+    #192542 3px 6px
+  );
+  border: 2px solid rgba(255, 255, 255, 0.35);
+}
+
+/* 回る向きの円形矢印 */
+
+.turn-arrow {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.turn-arc {
+  width: 46%;
+  height: 46%;
+}
+
+.turn-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 6;
+}
+
+.turn-hand {
+  fill: none;
+  stroke: var(--gold);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transform-box: view-box;
+  transform-origin: center;
+}
+
+.turn-hand.turn-anim {
+  animation: turn-spin 8s linear infinite;
+}
+
+.turn-arrow.reverse .turn-hand {
+  animation-direction: reverse;
+}
+
+@keyframes turn-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.naming-bar {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
 }
 
 .pile h3,
 .hand-wrap h3,
-.log-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .log-wrap h3 {
   margin: 0 0 6px;
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.1em;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .pile-card {
@@ -1067,14 +1184,8 @@ body.room {
     font-size: 5.4rem;
   }
 
-  .players {
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-    gap: 8px;
-  }
-
-  .field {
-    gap: 16px;
-    padding: 14px;
+  .table {
+    height: min(52vh, 420px);
   }
 
   .pile-card {
