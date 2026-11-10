@@ -276,6 +276,16 @@ body.room {
   white-space: nowrap;
 }
 
+.round-indicator {
+  padding: 1px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
 /* ---------------- lobby ---------------- */
 
 .panel {

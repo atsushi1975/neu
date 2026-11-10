@@ -21,6 +21,7 @@ const els = {
   summaryRemaining: document.getElementById("summary-remaining"),
   summarySum: document.getElementById("summary-sum"),
   summaryNote: document.getElementById("summary-note"),
+  roundIndicator: document.getElementById("round-indicator"),
   players: document.getElementById("players"),
   tableSum: document.getElementById("table-sum"),
   tableCard: document.getElementById("table-card"),
@@ -71,7 +72,7 @@ let streamRetry = null;
 let toastTimer = null;
 let lastRoundKey = null;
 let wasMyTurn = false;
-let logCollapsed = false;
+let logCollapsed = true;
 let lastArrowDir = null;
 
 function readSession() {
@@ -280,7 +281,7 @@ function renderSummary() {
     notes.push(`次は ${playerName(gameState.nextPlayerId)} さん`);
   }
   els.summaryNote.textContent = notes.join(" ／ ");
-  els.summaryRound.textContent = `ラウンド ${gameState.round}`;
+  if (els.roundIndicator) els.roundIndicator.textContent = `ラウンド ${gameState.round}`;
 }
 
 function renderPlayers() {
