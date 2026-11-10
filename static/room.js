@@ -577,6 +577,25 @@ function renderLog() {
   }
 }
 
+function hideToast() {
+  els.toast.classList.remove("show");
+  setTimeout(() => {
+    if (!els.toast.classList.contains("show")) els.toast.hidden = true;
+  }, 250);
+}
+
+function renderToastHand(revealed) {
+  const box = els.toastHand;
+  if (!box) return;
+  box.replaceChildren();
+  const cards = Array.isArray(revealed) ? revealed : [];
+  for (const entry of cards) {
+    const cardEl = el("div", `small-card card-kind-${entry.kind} card-${entry.id}`);
+    cardEl.append(makeCardFace(entry));
+    box.append(cardEl);
+  }
+}
+
 function renderLastRound() {
   const lastRound = gameState.lastRound;
   if (!lastRound) return;
@@ -591,30 +610,33 @@ function renderLastRound() {
   if (key === lastRoundKey) return;
   lastRoundKey = key;
 
-  els.toastTitle.textContent = `${lastRound.loserName} さんが${
-    lastRound.reason === "no_playable_card" ? "負け" : "バースト"
-  }！`;
-  const bits = [
-    `合計 ${lastRound.sumAfter ?? lastRound.sum}`,
-    `チップ残り ${lastRound.chipsLeft}`,
-  ];
+  // ゲーム終了時は、勝者発表（renderResult）を優先する。
+  if (lastRound.gameOver) return;
+
+  els.toastTitle.textContent = lastRound.message || "";
+  const bits = [];
+  const sumValue = lastRound.sumAfter ?? lastRound.sum;
+  if (sumValue !== null && sumValue !== undefined) bits.push(`合計 ${sumValue}`);
+  if (lastRound.chipsLeft !== null && lastRound.chipsLeft !== undefined) {
+    bits.push(`チップ残り ${lastRound.chipsLeft}`);
+  }
   if (lastRound.eliminated) bits.push("脱落");
-  if (lastRound.gameOver) bits.push("ゲーム終了");
+  if (lastRound.nextRound && lastRound.nextRound.firstPlayer) {
+    bits.push(`次は ${playerName(lastRound.nextRound.firstPlayer)} さん`);
+  }
   els.toastBody.textContent = bits.join(" ／ ");
-  els.toast.classList.toggle("danger", Boolean(lastRound.eliminated || lastRound.gameOver));
+  els.toast.classList.toggle("danger", Boolean(lastRound.eliminated));
   els.toast.hidden = false;
   els.toast.classList.remove("show");
   // いったん reflow してアニメーションをやり直す。
   void els.toast.offsetWidth;
   els.toast.classList.add("show");
+  renderToastHand(lastRound.revealedHand);
 
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
-    els.toast.classList.remove("show");
-    setTimeout(() => {
-      if (!els.toast.classList.contains("show")) els.toast.hidden = true;
-    }, 250);
-  }, 4600);
+    hideToast();
+  }, 6000);
 }
 
 function renderResult() {
@@ -826,6 +848,11 @@ els.takeHost.addEventListener("click", async () => {
 els.logToggle.addEventListener("click", () => {
   logCollapsed = !logCollapsed;
   renderLog();
+});
+
+els.toast.addEventListener("click", () => {
+  clearTimeout(toastTimer);
+  hideToast();
 });
 
 els.cancelShot.addEventListener("click", () => {
