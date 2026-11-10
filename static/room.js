@@ -137,11 +137,14 @@ function apply(data) {
     els.lobbyPanel.hidden = false;
     els.gamePanel.hidden = true;
     els.resultOverlay.hidden = true;
+    document.body.classList.remove("in-game");
     setDocumentTitle(false);
     renderLobby();
   } else {
     els.lobbyPanel.hidden = true;
     els.gamePanel.hidden = false;
+    // 対戦中は 1 画面に収めるため、body を縦 flex レイアウトに切り替える。
+    document.body.classList.add("in-game");
     renderGame();
   }
 }
@@ -702,6 +705,7 @@ function showJoinPanel(message) {
   els.lobbyPanel.hidden = true;
   els.gamePanel.hidden = true;
   els.resultOverlay.hidden = true;
+  document.body.classList.remove("in-game");
   setDocumentTitle(false);
   if (message) showError(message);
 }

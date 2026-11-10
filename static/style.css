@@ -1038,6 +1038,107 @@ body.room {
   text-decoration: none;
 }
 
+/* ---------------- 1画面に収める（対戦中） ---------------- */
+
+body.room.in-game {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  padding: 0 max(10px, env(safe-area-inset-right))
+    env(safe-area-inset-bottom) max(10px, env(safe-area-inset-left));
+  overflow: hidden;
+}
+
+body.room.in-game .topbar {
+  position: static;
+  flex: 0 0 auto;
+  margin: 0 -10px;
+}
+
+body.room.in-game .error {
+  position: static;
+  flex: 0 0 auto;
+}
+
+body.room.in-game #game-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  width: min(760px, 100%);
+  margin: 4px auto 0;
+}
+
+body.room.in-game .table {
+  flex: 1 1 auto;
+  width: min(92vw, 360px);
+  height: auto;
+  min-height: 132px;
+  max-height: 56dvh;
+  margin: 0 auto;
+}
+
+body.room.in-game .status-bar {
+  flex: 0 0 auto;
+  min-height: 30px;
+  margin: 0;
+}
+
+body.room.in-game .prompt {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 10px;
+  overflow: hidden;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+body.room.in-game .hand-wrap {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+body.room.in-game .hand-wrap h3 {
+  margin: 0 0 3px;
+}
+
+body.room.in-game .hand-help {
+  margin: 3px 0 0;
+  font-size: 0.64rem;
+}
+
+body.room.in-game .hand {
+  gap: 6px;
+}
+
+body.room.in-game .card {
+  width: min(26vw, 16dvh, 108px);
+}
+
+body.room.in-game .log-wrap {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+body.room.in-game .log-header .ghost {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 0.72rem;
+}
+
+body.room.in-game .log {
+  max-height: 36px;
+}
+
+body.room.in-game .pile-card {
+  min-height: 0;
+}
+
 /* ---------------- desktop ---------------- */
 
 @media (min-width: 720px) {
