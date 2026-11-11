@@ -12,6 +12,7 @@ from gameplatform.errors import ConfigurationError
 from gameplatform.games import GameDefinition, register
 
 from .adapter import NeuGame
+from .cpu import CpuDriver
 
 
 def normalize_config(raw: Any) -> dict[str, Any]:
@@ -47,7 +48,7 @@ GAME = GameDefinition(
     view=player_view,
     act=act,
     normalize_config=normalize_config,
-    cpu_driver=None,
+    cpu_driver=CpuDriver,
 )
 
 register(GAME)

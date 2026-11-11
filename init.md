@@ -19,7 +19,7 @@
 | 1 | ゲームエンジン + テスト + CLI（標準ライブラリのみ） | 完了 |
 | 2 | Flask + スマホ向け Web UI（素の JS、複数人オンライン対戦） | 完了 |
 | 3 | Docker 化・共通ロビー (game-lobby) 登録・VPS 展開 | 未着手 |
-| 4 | CPU プレイヤーの強化 | 未着手 |
+| 4 | CPU プレイヤーの追加 | 完了 |
 
 ### 技術方針
 
@@ -50,6 +50,7 @@ games/neu/
   __init__.py       GameDefinition(key="neu", title="ノイ") の登録
   adapter.py        GameState と共通基盤をつなぐアダプタ
   cards.py         カード表示用メタ情報・一意な cardId
+  cpu.py            CPU プレイヤー（カード選択・SHOT 指名・step）
   view.py           プレイヤーごとの公開ビュー
 web/
   __init__.py       Flask アプリ生成・static_folder 設定
@@ -71,6 +72,7 @@ tests/
   test_random.py    ランダムプレイの終了性・保存則・再現性
   test_view.py      view_for / to_dict / from_dict
   test_neu_adapter.py アダプタ・公開 view・構造化ログ・ラウンド結果
+  test_neu_cpu.py   CPU のカード選択・SHOT 指名・対戦の終了性
   test_api.py       部屋作成→参加→開始→対戦→終了の API 結合
 init.md             このファイル
 README.md
@@ -304,7 +306,7 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 130 テスト（エンジン・アダプタ・API 結合）。
+現在 151 テスト（エンジン・アダプタ・CPU・API 結合）。
 
 ### CLI
 
@@ -354,7 +356,7 @@ python3 app.py --port 5001
 | `POST` | `/api/rooms/<id>/leave` | 退出（開始前のみ） |
 | `POST` | `/api/rooms/<id>/host` | ホスト引き継ぎ（開始前のみ） |
 | `GET` | `/api/rooms/<id>/state` | 自分の視点の状態 |
-| `POST` | `/api/rooms/<id>/start` | ゲーム開始（ホストのみ） |
+| `POST` | `/api/rooms/<id>/start` | ゲーム開始（ホストのみ、`cpuCount` でCPU人数を指定） |
 | `POST` | `/api/rooms/<id>/actions` | カードを出す（`type: "play"`, `cardId`, `expectedRevision`, SHOT は `target`） |
 | `POST` | `/api/rooms/<id>/stream-ticket` | SSE 用の短命チケット |
 | `GET` | `/api/rooms/<id>/events` | SSE（変更通知） |
@@ -397,7 +399,6 @@ python3 app.py --port 5001
 ### 未対応（フェーズ3以降）
 
 - Docker 化、共通ロビー登録、VPS 展開。
-- CPU 対戦。現在 `cpu_driver=None` のため、`cpuCount > 0` での開始は API が拒否する。
 - `back.png` / `chip.png` は未提供。裏面・チップは CSS で代替している。
 
 ---
@@ -455,8 +456,13 @@ python3 app.py --port 5001
     「やめる」ボタンの表示ラッパーも指名モードに合わせて表示/非表示
   - 検証: tests/ui_check.py に SHOT 即時タップ (a)・タップ中再描画 (b)・非指名席タップ (c)・
     MutationObserver による再描画0回確認を追加
+- [x] フェーズ4: CPU プレイヤーの追加（2026-11）
+  - [x] `games/neu/cpu.py` の `CpuDriver`（`step(game) -> bool`）を実装
+  - [x] `games/neu/__init__.py` の `cpu_driver` に登録
+  - [x] 開始UIに「ゲーム開始 ▾」のCPU人数選択を追加（人間＋CPUで2〜7人）
+  - [x] CPU のカード選択・SHOT 指名・DOUBLE・ラウンド負けを含むテスト
+  - [x] CPU混じりの API 対戦が最後まで終わることを確認
 - [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
-- [ ] フェーズ4: CPU 強化
 
 ---
 
@@ -482,14 +488,39 @@ python3 app.py --port 5001
 - 共通ロビーへ戻るリンクは、同じホストのルート（既定ポート80）を指す。
 - ルームはメモリ上に保持する（`gameplatform.rooms`）。再起動で消えるため、永続化はフェーズ3以降の課題。
 
-### フェーズ4（CPU）への引き継ぎ
+### フェーズ4（CPU）の実装メモ — 2026-11 完了
 
-- `games/neu/__init__.py` の `cpu_driver=None` を、`games/neu/cpu.py` の実装に差し替える。
-- 共通基盤側は `cpu_driver(game, cpu_ids, config)` が `step(game) -> bool` を持つオブジェクトを期待する
-  （1手進めたら `True`、打てない/終了なら `False`）。
-- CPU も必ず `legal_actions` / `apply` を通す。UI や API にルールを足さない。
-- 開始 UI は現在 CPU 人数を出していない。`cpu_driver` を登録したら
-  `startOptions` 相当の人数選択を戻す。
+- `games/neu/cpu.py` の `CpuDriver` を `games/neu/__init__.py` の `cpu_driver` に登録した。
+- 共通基盤は `cpu_driver(game, cpu_ids, config)` が `step(game) -> bool` を持つオブジェクトを期待する
+  （1手進めたら `True`、人間の番・打てない・終了なら `False`）。
+- CPU も必ず `legal_actions` / `apply` を通す（`NeuGame.act` 経由）。UI や API にルールを足さない。
+- 開始 UI は「ゲーム開始 ▾」のメニューで、人間＋CPUの合計が2〜7人になる選択肢を出す。
+  人間は必ず1人以上（ルーム作成者がホストとして残る）。
+
+#### 赤数字の定義
+- 赤数字 = `n1`〜`n9`, `n10`, `n50`（`RED_CARD_IDS`）。
+- それ以外（`nm1`, `nm10`, `n101`, `pass`, `turn`, `shot`, `double`）は赤数字ではない。
+
+#### カードの選び方（`legal_actions` の合法手のみ）
+- 出せるカードが赤数字だけ: 90% で最大の赤数字、10% で出せるカードからランダム
+  （`RED_ONLY_MAX_PROBABILITY = 0.9`）。
+- 赤数字がない: 出せるカードからランダム。
+- 赤数字と赤数字以外が混在: 80% で最大の赤数字、20% で赤数字以外からランダム
+  （`MIXED_MAX_RED_PROBABILITY = 0.8`）。
+- 最大値が同値で複数あるときは、その中からランダム。
+
+#### SHOT の指名先
+- 合法手が許す対象（自分以外の生存者）だけから選ぶ。
+- 各対象の「直近にその人が出したカード `SHOT_HISTORY_WINDOW = 5` 枚のうち赤数字だった比率」を
+  重みにして、比率に比例する確率で選ぶ。全員 0 なら均等ランダム。
+- 履歴はエンジンの `GameState.events`（`席N が <card> を出した` / PASS / TURN / SHOT / DOUBLE）から
+  都度作る。エンジンの状態や API の形は変えていない。
+
+#### 待ち時間・乱数・名前
+- 待ち時間は犯人は踊ると同じく、共通基盤 `gameplatform.rooms.CPU_TURN_DELAY_SECONDS = 1.5` 秒。
+  CPU スレッドが1手ごとに待つ方式で、テストではこの定数を 0 に差し替える。
+- CPU は自前の `random.Random` を持ち、`CpuDriver(..., rng=random.Random(seed))` で再現できる。
+- 表示名は共通基盤の `_new_cpus` が付ける `CPU1`, `CPU2`, ...（人間と同じ名前は避ける）。
 
 ---
 

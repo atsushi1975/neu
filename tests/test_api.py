@@ -301,6 +301,65 @@ class ApiTest(unittest.TestCase):
             {"ok", "games", "title", "version", "status", "playing_rooms"},
         )
 
+    def test_start_with_cpu_adds_cpu_players_and_game_finishes(self):
+        host_client, host = self.create_room("ホスト")
+        room_id = host["roomId"]
+        response = host_client.post(
+            f"/api/rooms/{room_id}/start",
+            headers=self.headers(host["token"]),
+            json={"cpuCount": 2},
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        payload = response.get_json()
+        names = [player["name"] for player in payload["room"]["players"]]
+        self.assertIn("CPU1", names)
+        self.assertIn("CPU2", names)
+        self.assertEqual(len(payload["game"]["players"]), 3)
+        rooms.wait_for_cpus(room_id)
+
+        rng = random.Random(123)
+        steps = 0
+        game = None
+        while steps < 3000:
+            state = self.state(host_client, room_id, host["token"]).get_json()
+            game = state["game"]
+            if game["phase"] == "finished":
+                break
+            if game["currentPlayerId"] != host["playerId"]:
+                rooms.wait_for_cpus(room_id)
+                continue
+            playable = [card for card in game["me"]["hand"] if card["playable"]]
+            self.assertTrue(playable)
+            card = rng.choice(playable)
+            action = {
+                "type": "play",
+                "cardId": card["cardId"],
+                "expectedRevision": game["revision"],
+            }
+            if card["targets"]:
+                action["target"] = rng.choice(card["targets"])
+            played = host_client.post(
+                f"/api/rooms/{room_id}/actions",
+                headers=self.headers(host["token"]),
+                json=action,
+            )
+            self.assertEqual(played.status_code, 200, played.get_json())
+            steps += 1
+        self.assertLess(steps, 3000)
+        self.assertEqual(game["phase"], "finished")
+        self.assertIsNotNone(game["result"])
+
+    def test_cpu_count_is_limited_by_max_players(self):
+        host_client, host = self.create_room("ホスト")
+        room_id = host["roomId"]
+        response = host_client.post(
+            f"/api/rooms/{room_id}/start",
+            headers=self.headers(host["token"]),
+            json={"cpuCount": 7},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(rooms.get_room(room_id).started)
+
     def _current_view(self, room_id, tokens, clients):
         for player_id, token in tokens.items():
             payload = self.state(clients[player_id], room_id, token).get_json()
