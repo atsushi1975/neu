@@ -58,7 +58,7 @@ class CardChoiceTest(unittest.TestCase):
     def test_no_red_chooses_random_card(self):
         hand = cards("nm1", "nm10", "pass")
         index = choose_card_index(
-            hand, all_actions(hand), ScriptedRandom(0.0, choice_index=1)
+            hand, all_actions(hand), ScriptedRandom(0.95, choice_index=1)
         )
         self.assertEqual(hand[index].id, "nm10")
 

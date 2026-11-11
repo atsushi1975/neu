@@ -18,7 +18,7 @@ from collections import deque
 from typing import Any, Iterable
 
 from gameplatform.errors import InvalidAction
-from neu.engine import Action, Card, GameState, legal_actions
+from neu.engine import Action, Card, GameState, legal_actions, projected_total
 
 from .cards import card_key
 
@@ -42,10 +42,27 @@ RED_CARD_IDS = frozenset(
     }
 )
 
-# 出せるカードが赤数字だけのとき、最大の赤数字を選ぶ確率。
-RED_ONLY_MAX_PROBABILITY = 0.9
-# 赤数字と赤数字以外が混在するとき、最大の赤数字を選ぶ確率。
-MIXED_MAX_RED_PROBABILITY = 0.8
+# 黒カード（赤数字以外）の優先度順（上ほど優先）。1か所に集約する。
+BLACK_CARD_PRIORITY = ["pass", "turn", "shot", "nm1", "n101", "nm10", "double"]
+# 互換用の別名
+BLACK_PRIORITY_ORDER = BLACK_CARD_PRIORITY
+BLACK_CARD_PRIORITY_ORDER = BLACK_CARD_PRIORITY
+BLACK_PRIORITY = BLACK_CARD_PRIORITY
+
+# 確率定数（後から調整しやすいように名前付きで集約）。
+EXACT_101_PROBABILITY = 0.9  # 101 ぴったり狙い
+SURPRISE_101_PROBABILITY = 0.9  # 特殊 101 の奇襲
+RED_ONLY_MAX_PROBABILITY = 0.9  # 赤数字のみ: 最大を選ぶ確率
+MIXED_MAX_RED_PROBABILITY = 0.8  # 混在: 最大の赤数字を選ぶ確率
+BLACK_ONLY_PRIORITY_PROBABILITY = 0.8  # 黒のみ: 優先度順で選ぶ確率
+MIXED_BLACK_PRIORITY_PROBABILITY = 0.8  # 混在の黒分岐: 優先度順で選ぶ確率
+PATTERN_A_MAX_PROBABILITY = RED_ONLY_MAX_PROBABILITY
+PATTERN_B_PRIORITY_PROBABILITY = BLACK_ONLY_PRIORITY_PROBABILITY
+PATTERN_C_MAX_RED_PROBABILITY = MIXED_MAX_RED_PROBABILITY
+PATTERN_C_BLACK_PRIORITY_PROBABILITY = MIXED_BLACK_PRIORITY_PROBABILITY
+AIM_101_PROBABILITY = EXACT_101_PROBABILITY
+SPECIAL_101_PROBABILITY = SURPRISE_101_PROBABILITY
+
 # SHOT の指名先を決めるときに見る「その人が直近に出したカード」の枚数。
 SHOT_HISTORY_WINDOW = 5
 
@@ -106,40 +123,89 @@ def red_ratios_from_events(
     return ratios
 
 
-def choose_card_index(
-    hand: list[Card],
-    actions: list[Action],
-    rng: random.Random,
-) -> int | None:
-    """合法手のカードから、手札のインデックスを1つ選ぶ。
+def _is_state(obj: Any) -> bool:
+    return hasattr(obj, "players") and hasattr(obj, "total") and hasattr(obj, "current_player")
 
-    同じカード（SHOT は指名先ごとに合法手が複数ある）は1枚として数える。
-    """
+
+def _extract_context(*args: Any, **kwargs: Any) -> tuple[list[Card], list[Action], random.Random, GameState | None, int]:
+    state = kwargs.get("state", None)
+    hand = kwargs.get("hand", None)
+    actions = kwargs.get("actions", None)
+    rng = kwargs.get("rng", None)
+    total = kwargs.get("total", None)
+
+    if args:
+        first = args[0]
+        if _is_state(first):
+            state = first
+            # remaining positional args may be rng or actions
+            for arg in args[1:]:
+                if isinstance(arg, random.Random):
+                    rng = arg
+                elif isinstance(arg, (list, tuple)):
+                    # distinguish actions vs hand by content
+                    if actions is None:
+                        actions = list(arg)
+                    elif hand is None:
+                        hand = list(arg)
+            # also support (state, actions, rng) etc handled above
+        else:
+            if hand is None and len(args) > 0:
+                hand = args[0]
+            if actions is None and len(args) > 1:
+                actions = args[1]
+            if rng is None and len(args) > 2:
+                rng = args[2]
+            if total is None and len(args) > 3:
+                total = args[3]
+
+    if state is not None:
+        if hand is None:
+            cp = state.current_player
+            if cp is None:
+                cp = 0
+            hand = list(state.players[cp].hand)
+        if actions is None:
+            try:
+                actions = list(legal_actions(state))
+            except Exception:
+                actions = []
+        if total is None:
+            total = state.total
+
+    if hand is None:
+        hand = []
+    if actions is None:
+        actions = []
+    if total is None:
+        total = 0
+    if rng is None:
+        rng = random.Random()
+
+    return list(hand), list(actions), rng, state, int(total)
+
+
+def _projected_total(state: GameState | None, total: int, card: Card) -> int:
+    if state is not None:
+        try:
+            return projected_total(state, card)
+        except Exception:
+            pass
+    if card.kind == "hundred":
+        return 101
+    if card.kind == "number":
+        return total + card.value
+    return total
+
+
+def _unique_indices(hand: list[Card], actions: list[Action]) -> list[int]:
     indices: list[int] = []
     seen: set[int] = set()
     for action in actions:
         if action.card_index not in seen:
             seen.add(action.card_index)
             indices.append(action.card_index)
-    if not indices:
-        return None
-
-    playable = [(index, hand[index]) for index in indices]
-    red = [(index, card) for index, card in playable if card.id in RED_CARD_IDS]
-    non_red = [(index, card) for index, card in playable if card.id not in RED_CARD_IDS]
-
-    if red and not non_red:
-        if rng.random() < RED_ONLY_MAX_PROBABILITY:
-            return _choose_max_red(red, rng)
-        return rng.choice(indices)
-
-    if red and non_red:
-        if rng.random() < MIXED_MAX_RED_PROBABILITY:
-            return _choose_max_red(red, rng)
-        return rng.choice([index for index, _card in non_red])
-
-    # 赤数字が1枚も出せないとき（または合法手が空でないが赤がないとき）は全体からランダム。
-    return rng.choice(indices)
+    return indices
 
 
 def _choose_max_red(red: list[tuple[int, Card]], rng: random.Random) -> int:
@@ -147,6 +213,96 @@ def _choose_max_red(red: list[tuple[int, Card]], rng: random.Random) -> int:
     maximum = max(card.value for _index, card in red)
     tied = [index for index, card in red if card.value == maximum]
     return rng.choice(tied)
+
+
+def _black_priority(card_id: str) -> int:
+    try:
+        return BLACK_CARD_PRIORITY.index(card_id)
+    except ValueError:
+        return len(BLACK_CARD_PRIORITY)
+
+
+def _choose_priority_black(non_red: list[tuple[int, Card]], rng: random.Random) -> int:
+    best = min(_black_priority(card.id) for _index, card in non_red)
+    tied = [index for index, card in non_red if _black_priority(card.id) == best]
+    return rng.choice(tied)
+
+
+def choose_card_index(*args: Any, **kwargs: Any) -> int | None:
+    """合法手のカードから、手札のインデックスを1つ選ぶ。
+
+    同じカード（SHOT は指名先ごとに合法手が複数ある）は1枚として数える。
+
+    呼び出し形式:
+      - choose_card_index(hand, actions, rng)
+      - choose_card_index(state, rng)
+      - choose_card_index(hand, actions, rng, total=...) / state=...
+    """
+    hand, actions, rng, state, total = _extract_context(*args, **kwargs)
+
+    indices = _unique_indices(hand, actions)
+    if not indices:
+        return None
+
+    playable = [(index, hand[index]) for index in indices]
+    red = [(index, card) for index, card in playable if card.id in RED_CARD_IDS]
+    non_red = [(index, card) for index, card in playable if card.id not in RED_CARD_IDS]
+
+    # 1. 101 ぴったり狙い（n101 は除外: RED_CARD_IDS に含まれないため自動的に除外）
+    exact_candidates = [
+        (index, card)
+        for index, card in red
+        if _projected_total(state, total, card) == 101
+    ]
+    if exact_candidates and rng.random() < EXACT_101_PROBABILITY:
+        return rng.choice([index for index, _card in exact_candidates])
+
+    # 2. 特殊 101 の奇襲
+    n101_indices = [index for index, card in playable if card.id == "n101"]
+    has_other_black_in_hand = any(
+        (c.id not in RED_CARD_IDS) and c.id != "n101" for c in hand
+    )
+    if (
+        total <= 50
+        and n101_indices
+        and has_other_black_in_hand
+        and rng.random() < SURPRISE_101_PROBABILITY
+    ):
+        return n101_indices[0]
+
+    # 3. 通常判定
+    if red and not non_red:
+        # パターン A: 赤数字のみ
+        if rng.random() < RED_ONLY_MAX_PROBABILITY:
+            return _choose_max_red(red, rng)
+        return rng.choice([index for index, _card in red])
+
+    if non_red and not red:
+        # パターン B: 黒カードのみ
+        if rng.random() < BLACK_ONLY_PRIORITY_PROBABILITY:
+            return _choose_priority_black(non_red, rng)
+        return rng.choice([index for index, _card in non_red])
+
+    if red and non_red:
+        # パターン C: 混在
+        if rng.random() < MIXED_MAX_RED_PROBABILITY:
+            return _choose_max_red(red, rng)
+        # 黒カードを出す
+        if rng.random() < MIXED_BLACK_PRIORITY_PROBABILITY:
+            return _choose_priority_black(non_red, rng)
+        return rng.choice([index for index, _card in non_red])
+
+    # フォールバック
+    return rng.choice(indices)
+
+
+# 互換用の別名
+choose_card = choose_card_index
+choose_play = choose_card_index
+choose_play_card = choose_card_index
+select_card = choose_card_index
+pick_card = choose_card_index
+choose_card_id = choose_card_index
 
 
 def choose_shot_target(
@@ -190,9 +346,10 @@ def choose_action(
         return None
 
     player = state.players[state.current_player]
-    card_index = choose_card_index(player.hand, actions, rng)
+    card_index = choose_card_index(state, rng)
     if card_index is None:
-        return None
+        # フォールバック: 合法手の先頭
+        card_index = actions[0].card_index
     card = player.hand[card_index]
     same_card = [action for action in actions if action.card_index == card_index]
 
