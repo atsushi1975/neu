@@ -55,9 +55,20 @@ def normalize_config(raw: Any) -> dict[str, Any]:
         return {}
     if not isinstance(raw, dict):
         raise ConfigurationError("設定はオブジェクトで指定してください。")
+    allowed = {"seriesLength"}
     for key in raw:
-        raise ConfigurationError(f"不明な設定です: {key}")
-    return {}
+        if key not in allowed:
+            raise ConfigurationError(f"不明な設定です: {key}")
+    if "seriesLength" not in raw:
+        return {}
+    from neu.series import validate_series_length
+
+    value = raw["seriesLength"]
+    try:
+        value = validate_series_length(value)
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
+    return {"seriesLength": value}
 
 
 def create_game(players: list[tuple[str, str]], config: dict[str, Any]) -> NeuGame:

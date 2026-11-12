@@ -509,6 +509,224 @@ def check_cpu_toast(page) -> None:
     print(f"[toast] タイトル: {data['titleText']} / 本文: {data['bodyText']}")
 
 
+def check_series_start_select(page) -> None:
+    """連戦選択のプルダウン（通常戦 / 3連戦 / 5連戦 / 10連戦）を確認する。"""
+    data = page.evaluate(
+        """() => {
+          const select = document.getElementById('series-select');
+          if (!select) return null;
+          const options = [...select.options].map((option) => ({
+            value: option.value,
+            text: option.textContent,
+          }));
+          return { exists: Boolean(select), value: select.value, options };
+        }"""
+    )
+    assert data, "連戦選択のプルダウン(#series-select)が見つかりません"
+    assert data["exists"], "連戦選択のプルダウン(#series-select)が見つかりません"
+    assert data["value"] == "1", f"連戦選択の既定値が不正です: {data['value']}"
+    assert [option["value"] for option in data["options"]] == ["1", "3", "5", "10"], (
+        f"連戦選択の選択肢が不正です: {data['options']}"
+    )
+    assert [option["text"] for option in data["options"]] == [
+        "通常戦",
+        "3連戦",
+        "5連戦",
+        "10連戦",
+    ], f"連戦選択の文言が不正です: {data['options']}"
+
+
+def check_series_toast(page) -> None:
+    """連戦待機中のトースト（表示・OKで次戦開始確認・次戦開始で自動クローズ）を確認する。"""
+    data = page.evaluate(
+        """() => {
+          const previousSeries = gameState.series;
+          const previousRound = gameState.lastRound;
+          const previousRoundKey = lastRoundKey;
+          gameState.series = {
+            game: 2,
+            totalGames: 3,
+            waiting: true,
+            isFinal: false,
+            result: {
+              game: 2,
+              totalGames: 3,
+              isFinal: false,
+              nextDealerSeat: 1,
+              seats: [
+                { seat: 0, rank: 1, points: 10, total: 20, seriesRank: 1, rankChange: 'up' },
+                { seat: 1, rank: 2, points: 0, total: 10, seriesRank: 2, rankChange: 'down' },
+              ],
+            },
+            confirmed: false,
+            remainingSeconds: 10,
+          };
+          gameState.lastRound = {
+            round: 1,
+            loserId: 'p1',
+            loserName: '相手',
+            message: '相手 さんは出せるカードがすべて101を超えるため負け',
+            chipsLeft: 0,
+            eliminated: true,
+            gameOver: true,
+          };
+          lastRoundKey = null;
+          renderLastRound();
+          const toast = document.getElementById('last-round-toast');
+          const title = document.getElementById('toast-title');
+          const body = document.getElementById('toast-body');
+          const ok = document.getElementById('toast-ok');
+          const rect = toast.getBoundingClientRect();
+          const result = {
+            visible: !toast.hidden && toast.classList.contains('show'),
+            title: title.textContent,
+            body: body.textContent,
+            okVisible: !ok.hidden,
+            insideViewport:
+              rect.left >= -1 && rect.right <= window.innerWidth + 1 &&
+              rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+          };
+          gameState.series = previousSeries;
+          gameState.lastRound = previousRound;
+          lastRoundKey = previousRoundKey;
+          return result;
+        }"""
+    )
+    assert data, "連戦トースト確認用の状態を組み立てられません"
+    assert data["visible"], f"連戦待機トーストが表示されていません: {data}"
+    assert data["title"] == "第2戦 / 全3戦", f"連戦トーストのタイトルが不正です: {data['title']}"
+    assert "1位" in data["body"] and "累計" in data["body"], (
+        f"連戦トーストの本文が不正です: {data['body']}"
+    )
+    assert data["okVisible"], f"連戦トーストに OK ボタンがありません: {data}"
+    assert data["insideViewport"], f"連戦トーストが画面からはみ出しています: {data}"
+
+    confirm_urls: list[str] = []
+
+    def _record_confirm(request) -> None:
+        if "/series/confirm" in request.url:
+            confirm_urls.append(request.url)
+
+    page.on("request", _record_confirm)
+    try:
+        page.locator("#toast-ok").click()
+        page.wait_for_timeout(1500)
+    finally:
+        page.off("request", _record_confirm)
+    assert confirm_urls, f"OK で次戦開始の確認を送りませんでした: {confirm_urls}"
+    hidden_after_ok = page.locator("#last-round-toast").evaluate("el => el.hidden")
+    page.wait_for_timeout(600)
+    hidden_after_ok = page.locator("#last-round-toast").evaluate("el => el.hidden")
+    assert hidden_after_ok, "OK を押してもトーストが閉じませんでした"
+
+    # 次戦が始まった（トースト側の状態がリセットされた）場合は、自動で閉じる。
+    data = page.evaluate(
+        """() => {
+          gameState.lastRound = null;
+          lastRoundKey = '1:p1:0:0:true';
+          renderLastRound();
+          const toast = document.getElementById('last-round-toast');
+          return { hidden: toast.hidden, shown: !toast.hidden && toast.classList.contains('show') };
+        }"""
+    )
+    assert not data["shown"], "次戦開始後のトーストが自動で閉じませんでした"
+
+
+def check_series_final_toast(page) -> None:
+    """最終戦のトースト（メダル付き・OKで結果オーバーレイへ）を確認する。"""
+    data = page.evaluate(
+        """() => {
+          const previousSeries = gameState.series;
+          const previousRound = gameState.lastRound;
+          const previousRoundKey = lastRoundKey;
+          const previousFinalOpen = finalSeriesToastOpen;
+          gameState.series = {
+            game: 3,
+            totalGames: 3,
+            waiting: false,
+            isFinal: true,
+            result: {
+              game: 3,
+              totalGames: 3,
+              isFinal: true,
+              nextDealerSeat: null,
+              seats: [
+                { seat: 0, rank: 1, points: 10, total: 30, seriesRank: 1, rankChange: 'up' },
+                { seat: 1, rank: 2, points: 7, total: 21, seriesRank: 2, rankChange: 'up' },
+                { seat: 2, rank: 3, points: 5, total: 15, seriesRank: 3, rankChange: 'same' },
+                { seat: 3, rank: 4, points: 1, total: 1, seriesRank: 4, rankChange: 'down' },
+                { seat: 4, rank: 5, points: 1, total: 1, seriesRank: 5, rankChange: 'down' },
+                { seat: 5, rank: 6, points: 1, total: 1, seriesRank: 6, rankChange: 'down' },
+                { seat: 6, rank: 7, points: 0, total: 0, seriesRank: 7, rankChange: 'down' },
+              ],
+            },
+            confirmed: true,
+            remainingSeconds: 0,
+          };
+          gameState.result = {
+            winnerId: 'p0',
+            winnerName: 'あなた',
+            message: 'あなた さんの勝ち！',
+            standings: [
+              { playerId: 'p0', rank: 1 },
+              { playerId: 'p1', rank: 2 },
+              { playerId: 'p2', rank: 3 },
+              { playerId: 'p3', rank: 4 },
+              { playerId: 'p4', rank: 5 },
+              { playerId: 'p5', rank: 6 },
+              { playerId: 'p6', rank: 7 },
+            ],
+          };
+          gameState.lastRound = {
+            round: 2,
+            loserId: 'p1',
+            loserName: '相手',
+            message: '相手 さんは出せるカードがすべて101を超えるため負け',
+            chipsLeft: 0,
+            eliminated: true,
+            gameOver: true,
+          };
+          lastRoundKey = null;
+          renderLastRound();
+          const toast = document.getElementById('last-round-toast');
+          const title = document.getElementById('toast-title');
+          const body = document.getElementById('toast-body');
+          const overlay = document.getElementById('result-overlay');
+          const rect = toast.getBoundingClientRect();
+          const result = {
+            visible: !toast.hidden && toast.classList.contains('show'),
+            title: title.textContent,
+            body: body.textContent,
+            overlayHidden: overlay ? overlay.hidden : null,
+            insideViewport:
+              rect.left >= -1 && rect.right <= window.innerWidth + 1 &&
+              rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+            scrollHeight: toast.scrollHeight,
+            clientHeight: toast.clientHeight,
+          };
+          gameState.series = previousSeries;
+          gameState.lastRound = previousRound;
+          lastRoundKey = previousRoundKey;
+          finalSeriesToastOpen = previousFinalOpen;
+          return result;
+        }"""
+    )
+    assert data, "最終戦トースト確認用の状態を組み立てられません"
+    assert data["visible"], f"最終戦トーストが表示されていません: {data}"
+    assert data["title"] == "最終結果", f"最終戦トーストのタイトルが不正です: {data['title']}"
+    assert "🥇" in data["body"], f"最終戦トーストに金メダルがありません: {data['body']}"
+    assert data["overlayHidden"], f"最終戦トースト表示中に結果オーバーレイが出ています: {data}"
+    assert data["insideViewport"], f"最終戦トーストが画面からはみ出しています: {data}"
+    assert data["scrollHeight"] <= data["clientHeight"] + 1, (
+        f"最終戦トーストが縦スクロールなしに収まりません: scrollHeight={data['scrollHeight']} clientHeight={data['clientHeight']}"
+    )
+
+    page.locator("#toast-ok").click()
+    page.wait_for_timeout(1500)
+    overlay_hidden = page.locator("#result-overlay").evaluate("el => el.hidden")
+    assert not overlay_hidden, "最終戦トーストの OK 後に結果オーバーレイが出ません"
+
+
 def check_cpu_prompt(page) -> None:
     """手番の案内に CPU の文字バッジが出ることを確認する。"""
     data = page.evaluate(
@@ -1005,6 +1223,26 @@ def check_render_stability(page, duration: float = 5.0) -> None:
     print(f"[render-stability] OK: {count} changes over {duration}s")
 
 
+def run_series_toast_scenario(browser, viewport: tuple[int, int], tag: str) -> None:
+    """連戦の開始選択・待機トースト・最終戦トースト（メダル・OK）の手動確認。"""
+    context = new_context(browser, viewport)
+    try:
+        page = context.new_page()
+        room_id, host_pid, host_token = api_create_room(f"ホスト{tag}")
+        host = PlayerPage(context, f"ホスト{tag}")
+        host.adopt_session(room_id, host_token, host_pid, host.name)
+        wait_for_game(page)
+        check_series_start_select(page)
+        check_series_toast(page)
+        check_series_final_toast(page)
+        series_screenshot = take_screenshot(
+            page, f"{tag}_series_toast_{viewport[0]}x{viewport[1]}"
+        )
+        print(f"[{tag}] 連戦トースト確認用スクリーンショット: {series_screenshot}")
+    finally:
+        context.close()
+
+
 def main() -> None:
     if port_in_use(5001):
         raise SystemExit(
@@ -1026,6 +1264,8 @@ def main() -> None:
                 run_scenario(browser, players_count=7, viewport=(390, 844), tag="seven")
                 run_cpu_scenario(browser, cpu_count=1, viewport=(360, 640), tag="cpu-two")
                 run_cpu_scenario(browser, cpu_count=6, viewport=(360, 640), tag="cpu-seven")
+                run_series_toast_scenario(browser, viewport=(390, 844), tag="series")
+                run_series_toast_scenario(browser, viewport=(360, 640), tag="series-small")
             finally:
                 browser.close()
     finally:

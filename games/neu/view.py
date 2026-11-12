@@ -155,6 +155,7 @@ def build_view(game: Any, player_id: str) -> dict[str, Any]:
         },
         "lastRound": game.last_round,
         "last_round": game.last_round,
+        "series": game.series_view(player_id),
         "events": game.recent_events(),
         "eventMessages": [event["message"] for event in game.recent_events()],
         "result": result,

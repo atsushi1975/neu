@@ -19,13 +19,23 @@ from neu.engine import (
     GameState,
     NeuError,
     apply,
+    finish_order,
     new_game,
 )
+from neu.series import (
+    build_series_result,
+    ranks_from_round_results,
+    validate_series_length,
+)
+from gameplatform.errors import InvalidAction
 
 from .cards import CARD_LABELS, card_key, card_to_view
 from .view import build_view
 
 _SEAT_PATTERN = re.compile(r"席(\d+)")
+
+# 連戦の次戦開始待ちのタイムアウト（秒）。テストから差し替え可能にする。
+SERIES_NEXT_MATCH_SECONDS = 10.0
 
 
 class NeuGame:
@@ -60,6 +70,15 @@ class NeuGame:
         self._events: list[dict[str, Any]] = []
         self._event_seq = 0
         self._consumed_events = 0
+        # 連戦（series）の状態。1試合終了時に waiting / final を切り替える。
+        self.total_games = validate_series_length((config or {}).get("seriesLength", 1))
+        self.game_number = 1
+        self._series_waiting = False
+        self._series_deadline: float | None = None
+        self.last_series_result: dict[str, Any] | None = None
+        self._previous_scores_by_seat: dict[int, int] | None = None
+        self._previous_series_ranks_by_seat: dict[int, int] | None = None
+        self.series_confirmed: set[str] = set()
 
     # ------------------------------------------------------------------ 基本
 
@@ -67,40 +86,111 @@ class NeuGame:
     def phase(self) -> str:
         if self.state is None:
             return "lobby"
+        if self._series_waiting:
+            return "waiting"
         return "finished" if self.state.phase == "game_over" else "playing"
 
     @property
     def result(self) -> dict[str, Any] | None:
-        if self.state is None or self.state.winner is None:
+        if self.state is None or self.state.winner is None or self._series_waiting:
             return None
-        winner_id = self.player_id_at(self.state.winner)
-        return {
-            "winnerId": winner_id,
+        series = self.last_series_result
+        result = {
+            "winnerId": self.player_id_at(self.state.winner),
             "winnerName": self.name_at(self.state.winner),
             "message": f"{self.name_at(self.state.winner)} さんの勝ち！",
             "standings": self._standings(self.state.winner),
         }
+        if series is not None:
+            result["series"] = dict(series)
+            if bool(series.get("isFinal")):
+                # 最終戦は「最終の積算結果」で standings を返し直す。
+                result["standings"] = [
+                    {
+                        "playerId": self.player_id_at(int(row["seat"])),
+                        "rank": int(row["seriesRank"]),
+                    }
+                    for row in sorted(
+                        series.get("seats") or [],
+                        key=lambda item: (int(item["seriesRank"]), int(item["seat"])),
+                    )
+                ]
+        return result
+
+    @property
+    def series_length(self) -> int:
+        return self.total_games
+
+    @property
+    def is_series_waiting(self) -> bool:
+        return self._series_waiting
+
+    @property
+    def series_waiting_result(self) -> dict[str, Any] | None:
+        return self.last_series_result
+
+    @property
+    def series_next_tick_at(self) -> float | None:
+        if not self._series_waiting:
+            return None
+        return self._series_deadline
+
+    def _now(self) -> float:
+        # 共通基盤の既存時計をそのまま使う（テストは rooms._now を差し替える）。
+        from gameplatform.rooms import _now
+
+        return _now()
+
+    def _all_confirmed(self) -> bool:
+        human_ids = [
+            player_id
+            for player_id, _name in self.players
+            if not str(player_id).startswith("cpu")
+        ]
+        return all(player_id in self.series_confirmed for player_id in human_ids)
+
+    def _series_result_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        copied = dict(row)
+        seat = int(copied["seat"])
+        copied["playerId"] = self.player_id_at(seat)
+        copied["playerName"] = self.name_at(seat)
+        return copied
+
+    def series_view(self, player_id: str) -> dict[str, Any]:
+        """クライアント向けの連戦状態（シリーズ番号・確認・残り秒数・直近結果）。"""
+        from gameplatform.rooms import is_cpu_id
+
+        result = self.last_series_result
+        seats: list[dict[str, Any]] = []
+        if result is not None:
+            seats = [
+                self._series_result_row(row)
+                for row in sorted(
+                    result.get("seats") or [],
+                    key=lambda item: int(item["seat"]),
+                )
+            ]
+        remaining = 0
+        if self._series_waiting and self._series_deadline is not None:
+            remaining = max(0, int(self._series_deadline - self._now()))
+        return {
+            "game": self.game_number,
+            "totalGames": self.total_games,
+            "waiting": self._series_waiting,
+            "isFinal": self.game_number >= self.total_games,
+            "result": dict(result) if result is not None else None,
+            "seats": seats,
+            "confirmed": player_id in self.series_confirmed or is_cpu_id(player_id),
+            "remainingSeconds": remaining,
+        }
 
     def _standings(self, winner_seat: int) -> list[dict[str, Any]]:
         """勝者を1位、脱落者を最後に脱落した順（逆順）で並べる。"""
-        seats = [winner_seat]
-        seen = {winner_seat}
-        for round_result in reversed(self.state.round_results if self.state else []):
-            if not round_result.get("eliminated"):
-                continue
-            loser = round_result.get("loser")
-            if loser is None:
-                continue
-            seat = int(loser)
-            if seat in seen:
-                continue
-            seen.add(seat)
-            seats.append(seat)
-        # 想定外（脱落記録に載っていない人）は席番号順で末尾に並べる。
-        for seat in range(len(self.player_ids)):
-            if seat not in seen:
-                seen.add(seat)
-                seats.append(seat)
+        seats = finish_order(
+            self.state.round_results if self.state else [],
+            winner_seat,
+            len(self.player_ids),
+        )
         return [
             {"playerId": self.player_id_at(seat), "rank": rank}
             for rank, seat in enumerate(seats, start=1)
@@ -136,8 +226,95 @@ class NeuGame:
         if self.state is not None:
             raise ValueError("ゲームはすでに開始しています。")
         self.state = new_game(len(self.players), self._seed)
+        self.game_number = 1
+        self._series_waiting = False
+        self._series_deadline = None
+        self.last_series_result = None
+        self._previous_scores_by_seat = None
+        self._previous_series_ranks_by_seat = None
+        self.series_confirmed = set()
         self.revision += 1
         self._consume_events()
+
+    def _on_match_end(self, after: GameState) -> None:
+        """1試合終了時に連戦結果を組み立て、最終戦か次戦待機へ遷移する。"""
+        if after.phase != "game_over" or after.winner is None:
+            return
+        ranks = ranks_from_round_results(
+            after.round_results, after.winner, len(self.players)
+        )
+        result = build_series_result(
+            self.game_number,
+            self.total_games,
+            ranks,
+            self._previous_scores_by_seat,
+            self._previous_series_ranks_by_seat,
+        )
+        self.last_series_result = result
+        self._previous_scores_by_seat = {
+            int(row["seat"]): int(row["total"])
+            for row in result.get("seats") or []
+        }
+        self._previous_series_ranks_by_seat = {
+            int(row["seat"]): int(row["seriesRank"])
+            for row in result.get("seats") or []
+        }
+        if bool(result.get("isFinal")):
+            self._series_waiting = False
+            self._series_deadline = None
+            self.series_confirmed = set()
+        else:
+            self._series_waiting = True
+            self._series_deadline = self._now() + SERIES_NEXT_MATCH_SECONDS
+            self.series_confirmed = set()
+
+    def _start_next_match(self) -> bool:
+        """前戦のビリを最初のディーラーにして、席固定の新規ゲームを始める。"""
+        if self.last_series_result is None:
+            raise ValueError("次戦を開始するための前戦結果がありません。")
+        next_dealer_seat = self.last_series_result.get("nextDealerSeat")
+        if next_dealer_seat is None:
+            raise ValueError("最終戦では次戦を開始できません。")
+        self.game_number += 1
+        self.state = new_game(
+            len(self.players),
+            self._seed + self.game_number,
+            dealer=int(next_dealer_seat),
+        )
+        self._series_waiting = False
+        self._series_deadline = None
+        self.last_round = None
+        self._events = []
+        self._event_seq = 0
+        self._consumed_events = 0
+        self.revision += 1
+        self._consume_events()
+        return True
+
+    def tick(self, now: float | None = None) -> bool:
+        """連戦待機中の pending tick。"""
+        if not self._series_waiting or self.state is None:
+            return False
+        current = self._now() if now is None else float(now)
+        if self._all_confirmed() or current >= float(self._series_deadline or 0):
+            return self._start_next_match()
+        return False
+
+    def confirm(self, player_id: str) -> bool:
+        """人間プレイヤーの次戦開始確認。"""
+        if not self._series_waiting or self.state is None:
+            raise InvalidAction("次戦待ちではありません。")
+        if str(player_id).startswith("cpu"):
+            return False
+        if self.player_id_at(self.seat_of(player_id)) != player_id:
+            raise InvalidAction("このゲームのプレイヤーではありません。")
+        self.series_confirmed.add(player_id)
+        changed = True
+        if self._all_confirmed():
+            self._start_next_match()
+            changed = True
+        self.revision += 1
+        return changed
 
     # ------------------------------------------------------------------ 操作
 
@@ -196,6 +373,7 @@ class NeuGame:
         round_end = self._detect_round_end(before, after, card)
         if round_end is not None:
             self.last_round = round_end
+        self._on_match_end(after)
 
     def view(self, player_id: str) -> dict[str, Any]:
         return build_view(self, player_id)

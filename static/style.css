@@ -364,8 +364,28 @@ body.room {
   position: relative;
 }
 
-.start-wrap .primary {
-  width: 100%;
+.start-wrap .start-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.start-series {
+  flex: 0 0 auto;
+  width: 128px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid rgba(240, 201, 106, 0.5);
+  border-radius: 10px;
+  background: var(--felt);
+  color: var(--panel);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.start-wrap .start-row .primary {
+  flex: 1 1 auto;
+  width: auto;
   min-height: 52px;
   font-size: 1.02rem;
 }
@@ -970,6 +990,22 @@ body.room {
   margin: 3px 0 0;
   color: #e8dcc7;
   font-size: 0.8rem;
+  white-space: pre-line;
+}
+
+.toast .toast-ok {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin: 10px 0 0;
+  padding: 6px 18px;
+  border: 1px solid var(--gold);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--gold-soft), var(--gold));
+  color: #2a210b;
+  font-size: 0.9rem;
+  font-weight: 800;
 }
 
 /* 文章中の CPU バッジは、行の流れに沿った小さなインライン表示にする。 */

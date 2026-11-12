@@ -16,6 +16,7 @@ const els = {
   startButton: document.getElementById("start-button"),
   startWrap: document.getElementById("start-wrap"),
   startMenu: document.getElementById("start-menu"),
+  seriesSelect: document.getElementById("series-select"),
   takeHost: document.getElementById("take-host"),
   gamePanel: document.getElementById("game-panel"),
   roundIndicator: document.getElementById("round-indicator"),
@@ -38,6 +39,7 @@ const els = {
   toast: document.getElementById("last-round-toast"),
   toastTitle: document.getElementById("toast-title"),
   toastBody: document.getElementById("toast-body"),
+  toastOk: document.getElementById("toast-ok"),
   resultOverlay: document.getElementById("result-overlay"),
   resultWinner: document.getElementById("result-winner"),
   resultMessage: document.getElementById("result-message"),
@@ -62,6 +64,12 @@ const MEDALS = {
   3: { emoji: "🥉", label: "銅メダル" },
 };
 
+const RANK_CHANGE_EMOJI = {
+  up: "⬆️",
+  same: "➡️",
+  down: "⬇️",
+};
+
 let session = readSession();
 let roomState = null;
 let youState = null;
@@ -75,6 +83,7 @@ let eventSource = null;
 let streamRetry = null;
 let toastTimer = null;
 let lastRoundKey = null;
+let finalSeriesToastOpen = false;
 let wasMyTurn = false;
 let logCollapsed = true;
 let playersRenderRetryTimer = null;
@@ -211,6 +220,55 @@ function closeStartMenu() {
   els.startButton.setAttribute("aria-expanded", "false");
 }
 
+function selectedSeriesLength() {
+  const value = els.seriesSelect && els.seriesSelect.value ? els.seriesSelect.value : "1";
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function seriesToastTitle(series, final) {
+  if (final) return "最終結果";
+  const game = series ? series.game : 0;
+  const total = series ? series.totalGames : 0;
+  return `第${game}戦 / 全${total}戦`;
+}
+
+function seriesToastLines(series, final) {
+  const seats = (series && series.result && Array.isArray(series.result.seats)) ? series.result.seats : [];
+  const sorted = [...seats].sort(
+    (a, b) => Number(a.seriesRank) - Number(b.seriesRank) || Number(a.seat) - Number(b.seat)
+  );
+  const lines = [];
+  for (const row of sorted) {
+    const player = (gameState && gameState.players) ? gameState.players[Number(row.seat)] : null;
+    const medal = final && MEDALS[row.seriesRank] ? MEDALS[row.seriesRank].emoji : "";
+    const change = row.rankChange;
+    const changeEmoji = change ? RANK_CHANGE_EMOJI[change] || "" : "";
+    const name = player ? (player.isMe ? "あなた" : player.name) : "?";
+    lines.push(
+      `${medal ? `${medal} ` : ""}${row.seriesRank}位${changeEmoji ? ` ${changeEmoji}` : ""} ${name}（${row.rank}位 / ${row.points}点） 累計${row.total}点`
+    );
+  }
+  return lines;
+}
+
+function showSeriesToast(final) {
+  const series = gameState.series;
+  els.toastTitle.textContent = seriesToastTitle(series, final);
+  els.toastBody.textContent = seriesToastLines(series, final).join("\n");
+  els.toast.classList.add("series");
+  els.toastOk.hidden = false;
+  els.toast.hidden = false;
+  els.toast.classList.remove("show");
+  // いったん reflow してアニメーションをやり直す。
+  void els.toast.offsetWidth;
+  els.toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    hideToast();
+  }, 6000);
+}
+
 function renderStartMenu(options) {
   els.startMenu.replaceChildren();
   for (const option of options) {
@@ -227,7 +285,7 @@ function renderStartMenu(options) {
     button.setAttribute("role", "menuitem");
     button.addEventListener("click", () => {
       closeStartMenu();
-      startGame(option.cpuCount);
+      startGame(option.cpuCount, selectedSeriesLength());
     });
     item.append(button);
     els.startMenu.append(item);
@@ -530,6 +588,15 @@ function renderPrompt() {
     return;
   }
 
+  if (gameState.phase === "waiting") {
+    const series = gameState.series;
+    els.prompt.textContent = series
+      ? `第${series.game}戦 / 全${series.totalGames}戦の次戦待ち…`
+      : "次戦待ち…";
+    els.prompt.classList.remove("action");
+    return;
+  }
+
   const myTurn = isMyTurn();
   if (isShotNaming()) {
     const shot = shotCard();
@@ -729,6 +796,9 @@ function renderLog() {
 }
 
 function hideToast() {
+  finalSeriesToastOpen = false;
+  els.toast.classList.remove("series");
+  els.toastOk.hidden = true;
   els.toast.classList.remove("show");
   setTimeout(() => {
     if (!els.toast.classList.contains("show")) els.toast.hidden = true;
@@ -737,7 +807,16 @@ function hideToast() {
 
 function renderLastRound() {
   const lastRound = gameState.lastRound;
-  if (!lastRound) return;
+  const series = gameState.series || null;
+
+  if (!lastRound) {
+    // 新しい試合が始まった直後は、前のトーストを閉じておく。
+    if (lastRoundKey !== null) {
+      lastRoundKey = null;
+      hideToast();
+    }
+    return;
+  }
 
   const key = [
     lastRound.round,
@@ -749,8 +828,21 @@ function renderLastRound() {
   if (key === lastRoundKey) return;
   lastRoundKey = key;
 
-  // ゲーム終了時は、勝者発表（renderResult）を優先する。
-  if (lastRound.gameOver) return;
+  // 連戦（通常戦以外）では試合ごとの終了をトーストで案じる。
+  // 最終戦はメダル付きの最終結果トーストを出し、OK で結果オーバーレイへ戻す。
+  if (lastRound.gameOver) {
+    if (series && series.totalGames > 1) {
+      if (series.isFinal) {
+        finalSeriesToastOpen = true;
+        showSeriesToast(true);
+      } else if (series.waiting) {
+        if (series.confirmed === false) showSeriesToast(false);
+        else hideToast();
+      }
+    }
+    // 通常戦（連戦数1）のゲーム終了は、勝者発表（renderResult）へ。
+    return;
+  }
 
   // タイトルは「負けた人の名前 +（CPU なら）バッジ + 残りの文」に分ける。
   // サーバーが作る message は変えず、loserName で始まるときだけ分割する。
@@ -826,6 +918,11 @@ function orderedResultRows(result) {
 function renderResult() {
   const result = gameState.result;
   if (!result) {
+    els.resultOverlay.hidden = true;
+    return;
+  }
+  // 最終戦のトースト表示中は、結果オーバーレイを出さない（OK 後に出す）。
+  if (finalSeriesToastOpen) {
     els.resultOverlay.hidden = true;
     return;
   }
@@ -942,6 +1039,7 @@ function handleNotice(notice) {
   lastNoticeId = notice.id;
   els.toastTitle.textContent = notice.text || "";
   els.toastBody.textContent = "";
+  els.toastOk.hidden = true;
   els.toast.classList.toggle("danger", false);
   els.toast.hidden = false;
   els.toast.classList.remove("show");
@@ -951,6 +1049,26 @@ function handleNotice(notice) {
   toastTimer = setTimeout(() => {
     hideToast();
   }, 6000);
+}
+
+async function handleToastOk() {
+  const series = gameState ? gameState.series : null;
+  const finalMatch = finalSeriesToastOpen || Boolean(series && series.isFinal && series.totalGames > 1);
+  if (series && series.waiting && series.confirmed === false) {
+    // 連戦の待機中トーストは OK で「次戦開始」を確認する。
+    try {
+      await request(`/api/rooms/${roomId}/series/confirm`, { method: "POST", body: {} });
+      await refresh();
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+  hideToast();
+  if (finalMatch) {
+    // 最終戦のあとは、通常戦の終了後と同じ状態（結果オーバーレイ）に戻す。
+    finalSeriesToastOpen = false;
+    renderResult();
+  }
 }
 
 async function requestExit() {
@@ -1124,13 +1242,13 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeStartMenu();
 });
 
-async function startGame(cpuCount) {
+async function startGame(cpuCount, seriesLength) {
   if (busy) return;
   busy = true;
   try {
     const data = await request(`/api/rooms/${roomId}/start`, {
       method: "POST",
-      body: { cpuCount },
+      body: { cpuCount, seriesLength: seriesLength || selectedSeriesLength() },
     });
     apply(data);
   } catch (error) {
@@ -1162,6 +1280,10 @@ els.logToggle.addEventListener("click", () => {
 els.toast.addEventListener("click", () => {
   clearTimeout(toastTimer);
   hideToast();
+});
+
+els.toastOk.addEventListener("click", () => {
+  void handleToastOk();
 });
 
 els.cancelShot.addEventListener("click", () => {

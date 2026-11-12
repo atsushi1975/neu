@@ -47,7 +47,15 @@
     <p id="lobby-status" class="lobby-status" role="status" aria-live="polite"></p>
     <div class="lobby-actions">
       <div id="start-wrap" class="start-wrap" hidden>
-        <button id="start-button" type="button" class="primary" aria-haspopup="menu" aria-expanded="false">ゲーム開始 ▾</button>
+        <div class="start-row">
+          <select id="series-select" class="start-series" aria-label="連戦数">
+            <option value="1">通常戦</option>
+            <option value="3">3連戦</option>
+            <option value="5">5連戦</option>
+            <option value="10">10連戦</option>
+          </select>
+          <button id="start-button" type="button" class="primary" aria-haspopup="menu" aria-expanded="false">ゲーム開始 ▾</button>
+        </div>
         <ul id="start-menu" class="start-menu" role="menu" hidden></ul>
       </div>
       <button id="take-host" type="button" class="ghost small" hidden>ホストを引き継ぐ</button>
@@ -100,6 +108,7 @@
   <div id="last-round-toast" class="toast" role="status" aria-live="assertive" hidden>
     <p id="toast-title" class="toast-title"></p>
     <p id="toast-body" class="toast-body"></p>
+    <button id="toast-ok" type="button" class="toast-ok" hidden>OK</button>
   </div>
 
   <div id="result-overlay" class="overlay" hidden>

@@ -60,6 +60,9 @@ class Room:
     cpu_driver: Any | None = None
     # CPU の手番を進めるスレッドが動いているか（LOCK 内で更新する）。
     cpu_running: bool = False
+    # 連戦など「次の遷移」の deadline を撃つタイマー（ゲームが持つ pending tick 用）。
+    game_timer: Any | None = None
+    game_timer_at: float | None = None
     # 退出申請の状態。
     exit_request: Any | None = None
     exit_cooldown: dict[str, float] = field(default_factory=dict)
@@ -126,7 +129,7 @@ def leave_room(room_id: str, token: str) -> tuple[Room | None, str, bool]:
     """退出する。戻り値は (ルーム or 消滅なら None, プレイヤー id, ホスト交代の有無)。"""
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         if room.started and not _is_finished(room.game):
             raise RoomError("ゲーム中は退出できません。")
         sessions.revoke_player(room_id, player_id)
@@ -150,7 +153,7 @@ def take_host(room_id: str, token: str) -> tuple[Room, str]:
     """
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         if room.started:
             raise RoomError("ゲーム中はホストを変更できません。")
         room.host_id = player_id
@@ -158,10 +161,10 @@ def take_host(room_id: str, token: str) -> tuple[Room, str]:
         return room, player_id
 
 
-def start_game(room_id: str, token: str, cpu_count: int = 0) -> tuple[Room, str]:
+def start_game(room_id: str, token: str, cpu_count: int = 0, game_config: Any = None) -> tuple[Room, str]:
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         definition = room.definition
         if player_id != room.host_id:
             raise RoomError("開始できるのはホストだけです。", status=403)
@@ -174,13 +177,19 @@ def start_game(room_id: str, token: str, cpu_count: int = 0) -> tuple[Room, str]
             raise RoomError(f"CPUを含めて{definition.max_players}人までです。")
         if total < definition.min_players:
             raise RoomError(f"{definition.min_players}人以上で開始できます。")
+        start_config = dict(room.config)
+        if game_config:
+            if not isinstance(game_config, dict):
+                raise RoomError("開始設定はオブジェクトで指定してください。")
+            start_config.update(game_config)
+        normalized_config = definition.normalize_config(start_config)
         cpus = _new_cpus(room, cpu_count)
         # 席順はサーバー側で決める。ゲームの players 配列がそのまま席順
         # （手番の回る順）になり、クライアントは結果だけを受け取る。
         seats = _seat_order([*room.players, *cpus])
         game = definition.create(
             [(player["id"], player["name"]) for player in seats],
-            dict(room.config),
+            normalized_config,
         )
         try:
             game.start()
@@ -188,8 +197,9 @@ def start_game(room_id: str, token: str, cpu_count: int = 0) -> tuple[Room, str]
             raise RoomError(str(exc)) from exc
         room.players.extend(cpus)
         room.game = game
+        room.config = normalized_config
         if cpus:
-            room.cpu_driver = definition.cpu_driver(game, [cpu["id"] for cpu in cpus], dict(room.config))
+            room.cpu_driver = definition.cpu_driver(game, [cpu["id"] for cpu in cpus], normalized_config)
         room.version += 1
         kick_cpus(room)
         return room, player_id
@@ -207,6 +217,93 @@ def kick_cpus(room: Room) -> None:
     thread = threading.Thread(target=_run_cpus, args=(room.id,), daemon=True)
     _cpu_threads[room.id] = thread
     thread.start()
+
+
+def _cancel_game_timer(room: Room) -> None:
+    timer = room.game_timer
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+    room.game_timer = None
+    room.game_timer_at = None
+
+
+def _schedule_game_timer(room: Room) -> None:
+    """ゲームが次に遷移を持つかどうかを ``next_tick_at`` からタイマーする。
+
+    ゲームが pending を持たなければタイマーを止める。ゲーム実装は
+    ``tick(now) -> bool`` と ``next_tick_at`` を持てば、共通基盤側はこれだけで
+    遅延評価・タイマー・CPU 起動を扱える。
+    """
+    game = room.game
+    deadline = float(game.next_tick_at) if game is not None and getattr(game, "next_tick_at", None) is not None else None
+    if deadline is None:
+        _cancel_game_timer(room)
+        return
+    if (
+        room.game_timer is not None
+        and room.game_timer_at == deadline
+        and room.game_timer.is_alive()
+    ):
+        return
+    _cancel_game_timer(room)
+
+    def _fire() -> None:
+        with LOCK:
+            r = _rooms.get(room.id)
+            if r is None:
+                return
+            evaluate_game(r)
+        if r is not None:
+            try:
+                realtime.publish(r.id)
+            except Exception:
+                pass
+
+    delay = max(0.0, deadline - _now()) + 0.05
+    timer = threading.Timer(delay, _fire)
+    timer.daemon = True
+    room.game_timer = timer
+    room.game_timer_at = deadline
+    timer.start()
+
+
+def _tick_game(room: Room) -> bool:
+    game = room.game
+    if game is None:
+        return False
+    tick = getattr(game, "tick", None)
+    if not callable(tick):
+        return False
+    try:
+        return bool(tick(_now()))
+    except Exception:
+        logger.exception("ゲームの待機タイマー評価に失敗したため既定動作に戻します。 room=%s", room.id)
+        return False
+
+
+def evaluate_game(room: Room) -> bool:
+    """ゲーム内部の pending tick を1回評価する（LOCK 保持下で呼ぶ想定）。
+
+    遷移があれば version を進め、CPU の次の手番を kick する。
+    遷移がなければ何もしない。
+    """
+    changed = False
+    if room.game is not None:
+        changed = _tick_game(room)
+    if changed:
+        room.version += 1
+        kick_cpus(room)
+    _schedule_game_timer(room)
+    return changed
+
+
+def evaluate_room(room: Room) -> None:
+    """退出判定とゲーム pending tick をまとめて評価する（LOCK 保持下で呼ぶ想定）。"""
+    _evaluate_exit_request(room)
+    evaluate_game(room)
 
 
 def _cpu_delay(room: Room) -> float:
@@ -259,6 +356,8 @@ def _run_cpus(room_id: str) -> None:
             if not acted:
                 room.cpu_running = False
                 return
+            # 1手でゲームが終了・待機・次戦開始などに遷移した可能性がある。
+            evaluate_game(room)
         realtime.publish(room_id)
 
 
@@ -399,6 +498,7 @@ def _abort_game(room: Room) -> None:
     room.game = None
     room.cpu_driver = None
     room.cpu_running = False
+    _cancel_game_timer(room)
     # CPU プレイヤーを部屋から外す。
     room.players = [p for p in room.players if not is_cpu_id(p.get("id", ""))]
     _cancel_exit_timer(room)
@@ -456,7 +556,7 @@ def evaluate_exit_request(room: Room) -> None:
 def request_exit(room_id: str, token: str) -> tuple[Room, str, int]:
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         game = room.game
         if game is None or _is_finished(game):
             raise RoomError("進行中のゲームがありません。")
@@ -482,7 +582,7 @@ def request_exit(room_id: str, token: str) -> tuple[Room, str, int]:
 def vote_exit(room_id: str, token: str, request_id: Any, approve: bool) -> tuple[Room, str]:
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         req = room.exit_request
         if req is None:
             raise RoomError("退出要求はありません。")
@@ -502,7 +602,7 @@ def vote_exit(room_id: str, token: str, request_id: Any, approve: bool) -> tuple
 def cancel_exit(room_id: str, token: str) -> tuple[Room, str]:
     with LOCK:
         room, player_id = authenticate(room_id, token)
-        _evaluate_exit_request(room)
+        evaluate_room(room)
         req = room.exit_request
         if req is None:
             raise RoomError("退出要求はありません。")
@@ -510,6 +610,30 @@ def cancel_exit(room_id: str, token: str) -> tuple[Room, str]:
             raise RoomError("取り消せるのは要求した本人だけです。")
         room.exit_request = None
         _cancel_exit_timer(room)
+        return room, player_id
+
+
+def confirm_game(room_id: str, token: str) -> tuple[Room, str]:
+    """連戦待機中のプレイヤーによる「次戦開始の確認」を処理する。
+
+    ゲーム実装が ``confirm(player_id) -> bool`` を提供していればそれを呼ぶ。
+    遷移が発生したら version を進め、CPU を kick する。共通基盤側には
+    ゲーム固有の遷移語を持たせない。
+    """
+    with LOCK:
+        room, player_id = authenticate(room_id, token)
+        evaluate_room(room)
+        game = room.game
+        if game is None:
+            raise RoomError("ゲームがまだ開始していません。")
+        confirm = getattr(game, "confirm", None)
+        if not callable(confirm):
+            raise RoomError("このゲームは連戦に対応していません。")
+        changed = bool(confirm(player_id))
+        if changed:
+            room.version += 1
+            _schedule_game_timer(room)
+            kick_cpus(room)
         return room, player_id
 
 
@@ -534,6 +658,7 @@ def reset() -> None:
     with LOCK:
         for room in _rooms.values():
             _cancel_exit_timer(room)
+            _cancel_game_timer(room)
         _rooms.clear()
         _cpu_threads.clear()
         sessions.reset()

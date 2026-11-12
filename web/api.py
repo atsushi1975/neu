@@ -23,7 +23,7 @@ def _token() -> str:
 
 
 def _room_state(room: rooms.Room, player_id: str) -> dict[str, Any]:
-    rooms.evaluate_exit_request(room) if hasattr(rooms, "evaluate_exit_request") else None
+    rooms.evaluate_room(room)
     game_view = None
     if room.game is not None:
         game_view = room.definition.view(room.game, player_id)
@@ -33,6 +33,7 @@ def _room_state(room: rooms.Room, player_id: str) -> dict[str, Any]:
         # クライアントにホスト判定を推測させない（トークンと部屋の対応はサーバーが知っている）。
         "you": {"id": player_id, "isHost": room.host_id == player_id},
         "game": game_view,
+        "series": game_view.get("series") if game_view is not None else None,
         "exitRequest": rooms.exit_request_view(room, player_id),
         "notice": rooms.notice_view(room),
     }
@@ -237,7 +238,7 @@ def room_info(room_id: str):
     try:
         with rooms.LOCK:
             room = rooms.get_room(room_id)
-            rooms._evaluate_exit_request(room)
+            rooms.evaluate_room(room)
             payload = room.public()
             payload["notice"] = rooms.notice_view(room)
     except PlatformError as exc:
@@ -261,9 +262,27 @@ def start(room_id: str):
     cpu_count = data.get("cpuCount", 0)
     if isinstance(cpu_count, bool) or not isinstance(cpu_count, int) or cpu_count < 0:
         return _error("cpuCount は0以上の整数で指定してください。")
+    game_config = (
+        {"seriesLength": data["seriesLength"]} if "seriesLength" in data else None
+    )
     try:
         with rooms.LOCK:
-            room, player_id = rooms.start_game(room_id, _token(), cpu_count)
+            room, player_id = rooms.start_game(
+                room_id, _token(), cpu_count, game_config=game_config
+            )
+        realtime.publish(room_id)
+        with rooms.LOCK:
+            return jsonify(_room_state(room, player_id))
+    except PlatformError as exc:
+        return _error(str(exc), exc.status)
+
+
+@api.post("/rooms/<room_id>/series/confirm")
+def series_confirm(room_id: str):
+    """次戦開始の確認（人間）。全員またはタイムアウトで次戦へ進む。"""
+    try:
+        with rooms.LOCK:
+            room, player_id = rooms.confirm_game(room_id, _token())
         realtime.publish(room_id)
         with rooms.LOCK:
             return jsonify(_room_state(room, player_id))
@@ -277,7 +296,7 @@ def action(room_id: str):
     try:
         with rooms.LOCK:
             room, player_id = rooms.authenticate(room_id, _token())
-            rooms._evaluate_exit_request(room)
+            rooms.evaluate_room(room)
             game = room.game
             if game is None:
                 return _error("ゲームがまだ開始していません。")

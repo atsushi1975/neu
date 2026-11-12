@@ -39,6 +39,7 @@
 neu/
   __init__.py       公開 API の再エクスポート
   engine.py         ゲームエンジン本体（UI・I/O 非依存）
+  series.py         連戦の純粋ロジック（得点・積算順位・次戦ディーラー）
   cli.py            動作確認用 CLI（人間1人 + ランダム Bot）
 gameplatform/
   games.py          GameDefinition とゲーム登録
@@ -75,6 +76,8 @@ tests/
   test_neu_cpu.py   CPU のカード選択・SHOT 指名・対戦の終了性
   test_cpu_names.py CPU の表示名（候補から選択・重複回避・フォールバック）と isCpu
   test_cpu_delay.py CPU の待ち時間（人間全員チップ0で0）の単体・結合テスト
+  test_series.py    連戦の得点・競技順位・順位変動・次戦ディーラー
+  test_series_server.py 連戦のサーバー側開始・待機・確認・最終結果テスト
   test_api.py       部屋作成→参加→開始→対戦→終了の API 結合
 init.md             このファイル
 README.md
@@ -612,3 +615,86 @@ python3 app.py --port 5001
 - CPU プレイヤーの id は `"cpu"` で始める必要がある（`_new_cpus` が `"cpu-..."` を生成）。
   判定は `rooms.is_cpu_id(player_id)` に集約している（名前ではなく id）。
 - `notice` / `exit_seq` / `notice_seq` はリセット後も残す（通知が消えないように）。
+
+---
+
+## 12. 連戦システム — 2026-11 追加
+
+### 仕様
+
+- 連戦数: 1（通常戦。従来どおり）、3、5、10 のいずれか。
+- 試合内順位: 勝者が1位、脱落の逆順で2位、3位…。最初に脱落した人がビリ。
+- 得点: ビリ（最下位）は常に0点。それ以外は 1位=10、2位=7、3位=5、4位以下=1。
+  - 人数別の例: 2人は10/0。3人は10/7/0。4人は10/7/5/0。5人は10/7/5/1/0。7人は10/7/5/1/1/1/0。
+- 積算点: 各戦の得点の合計。
+- 積算順位: 競技順位方式。同点は同順位で、次の順位は飛ばす（1位が2人なら次は3位）。試合内順位は同順位にならない。
+- 順位変動: 前戦終了後の積算順位と比べる。良くなったら up、同じなら same、悪くなったら down。1戦目は比較対象がないので「なし」。
+- 次戦: 席は固定（同じ人が同じ席）。全カードを再配布し、チップは3に戻す（新規ゲーム相当）。最初のディーラーと最初の手番は前戦のビリ。1戦目だけ従来どおりランダム。
+- メダルは最終戦終了後の積算順位でのみつける。途中の試合順位・途中の積算順位にはつけない。ロジックは順位の数値だけ返し、絵文字はUI側で決める。
+- 各戦終了時に返す結果: 試合番号、全試合数、最終戦かどうか、試合内順位と獲得点（席ごと）、積算点・積算順位・順位変動（席ごと）。
+
+### 純粋ロジック `neu/series.py`
+
+外部 I/O・時計・乱数なし。席番号（0始まり）だけを扱い、`playerId` への変換は
+アダプタ側（後続の依頼）で行う。試合内順位は `neu.engine.finish_order`
+（勝者→脱落の逆順。旧 `NeuGame._standings` の処理を抽出）を再利用し、重複実装しない。
+
+- `SERIES_LENGTHS = (1, 3, 5, 10)`
+- `validate_series_length(total_games)`: 連戦数を検証して返す。
+- `points_for_rank(rank, player_count)`: 試合内順位から得点を返す。
+- `points_by_seat(ranks_by_seat)`: `{席: 順位}` から `{席: 得点}` を返す。
+- `add_scores(previous_scores_by_seat, earned_scores_by_seat)`: 積算点を返す。1戦目は `None` または `{}`。
+- `competition_ranks(scores_by_seat)`: 積算点から競技順位を返す（同点は同順位、次を飛ばす）。
+- `rank_changes(previous_ranks_by_seat, current_ranks_by_seat)`: `up` / `same` / `down` を返す。1戦目は全席 `None`。
+- `last_place_seat(ranks_by_seat)`: 最下位の席を返す。一意でなければ `ValueError`。
+- `next_dealer(ranks_by_seat)`: 次戦の最初のディーラー（前戦のビリ）の席を返す。
+- `ranks_from_round_results(round_results, winner_seat, player_count)`: `GameState.round_results` から `{席: 試合内順位}` を返す。
+- `build_series_result(game_number, total_games, ranks_by_seat, previous_scores_by_seat=None, previous_ranks_by_seat=None)`:
+  1試合分の結果を返す。
+
+`build_series_result` の戻り値:
+
+```python
+{
+    "game": 2,                 # 試合番号（1始まり）
+    "totalGames": 3,           # 連戦数
+    "isFinal": False,          # 最終戦かどうか
+    "nextDealerSeat": 0,       # 次戦の最初のディーラー（席）。最終戦は None
+    "seats": [
+        {
+            "seat": 0,
+            "rank": 4,         # この試合の順位
+            "points": 0,       # この試合の獲得点
+            "total": 10,       # 積算点
+            "seriesRank": 3,   # 積算順位
+            "rankChange": "down",  # None / "up" / "same" / "down"
+        },
+        # ... 席ごとに続く
+    ],
+}
+```
+
+- メダル・絵文字・`playerId` はこの戻り値に含めない。最終戦かどうかは `isFinal` で判断し、
+  メダルはUI側が最終戦の `seriesRank` だけを見て決める。
+- 脱落記録に載っていない席は、既存挙動を踏襲して席番号順で末尾に並べる。
+  エンジンが正常にゲームを終えた場合は全員の脱落が記録されるため、通常は発生しない。
+
+### サーバー側・API（依頼B の実装メモ）
+
+- 開始: `POST /api/rooms/<room_id>/start` は `seriesLength` を受け取る。許可値は
+  `1` / `3` / `5` / `10`、未指定は `1`。不正値は既存形式の 400 エラー。
+  ホストのみ開始可能。ゲーム共通の開始設定として `game_config` 経由でゲームへ渡す。
+- 連戦状態: `games/neu/adapter.py` が `game_number` / `totalGames` / `series_waiting` /
+  `last_series_result` / 確認済み集合 / 次の遷移 deadline を持つ。
+- 状態 API / SSE: ゲーム view の `series` に
+  `game` / `totalGames` / `waiting` / `isFinal` / `result` / `seats` / `confirmed` / `remainingSeconds`
+  を返す。リロード・再接続でも直近結果を復元できる。
+- 確認: `POST /api/rooms/<room_id>/series/confirm`（認証は既存トークン）。人間が全員
+  確認した、または 10 秒経過したら次戦へ。CPU は確認済み扱い。
+- 次戦待機: `game.phase = "waiting"`、ゲーム view の `phase` も `waiting`。最終戦だけ
+  `phase = "finished"` で終了扱い（次戦待機なし）。
+- 共通基盤: `gameplatform.rooms` に pending tick 用タイマー
+  （`next_tick_at` / `tick(now)`）と `evaluate_room` / `evaluate_game` を追加。
+  CPU スレッド・SSE・退出判定から同じ遅延評価を通る。最終戦・中止時はタイマーを止める。
+- 次戦開始: アダプタは前戦ビリを最初のディーラーにして `new_game` を再生成。
+  席固定は `NeuGame.players` の seat 順で維持。チップは新規ゲームと同じ `STARTING_CHIPS`。

@@ -682,6 +682,47 @@ def winner(state: GameState) -> Optional[int]:
     return state.winner
 
 
+def finish_order(
+    round_results: list[dict[str, Any]],
+    winner_seat: int,
+    num_players: int,
+) -> list[int]:
+    """ゲーム終了時の席順を返す（1位から順）。
+
+    1位は勝者。2位以降は ``round_results`` の ``eliminated`` が真の要素を
+    後ろからたどった「脱落の逆順」（最後に脱落した人が2位、最初に脱落した人が
+    最下位）。同じ席の脱落記録が複数あっても最初の1件だけを使う。
+
+    脱落記録に載っていない席は、席番号順で末尾に並べる。エンジンが正常に
+    ゲームを終えた場合は全員の脱落が記録されるため、このフォールバックは
+    保存データの欠損など想定外の入力向け。
+    """
+    if not (0 <= winner_seat < num_players):
+        raise InvalidSetup(f"勝者の席番号が範囲外です: {winner_seat}")
+
+    seats = [winner_seat]
+    seen = {winner_seat}
+    for result in reversed(round_results):
+        if not result.get("eliminated"):
+            continue
+        loser = result.get("loser")
+        if loser is None:
+            continue
+        seat = int(loser)
+        if not (0 <= seat < num_players):
+            continue
+        if seat in seen:
+            continue
+        seen.add(seat)
+        seats.append(seat)
+
+    for seat in range(num_players):
+        if seat not in seen:
+            seen.add(seat)
+            seats.append(seat)
+    return seats
+
+
 def view_for(state: GameState, seat: int) -> dict[str, Any]:
     """``seat`` 視点の公開情報を返す。
 
