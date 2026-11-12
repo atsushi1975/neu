@@ -78,7 +78,33 @@ class NeuGame:
             "winnerId": winner_id,
             "winnerName": self.name_at(self.state.winner),
             "message": f"{self.name_at(self.state.winner)} さんの勝ち！",
+            "standings": self._standings(self.state.winner),
         }
+
+    def _standings(self, winner_seat: int) -> list[dict[str, Any]]:
+        """勝者を1位、脱落者を最後に脱落した順（逆順）で並べる。"""
+        seats = [winner_seat]
+        seen = {winner_seat}
+        for round_result in reversed(self.state.round_results if self.state else []):
+            if not round_result.get("eliminated"):
+                continue
+            loser = round_result.get("loser")
+            if loser is None:
+                continue
+            seat = int(loser)
+            if seat in seen:
+                continue
+            seen.add(seat)
+            seats.append(seat)
+        # 想定外（脱落記録に載っていない人）は席番号順で末尾に並べる。
+        for seat in range(len(self.player_ids)):
+            if seat not in seen:
+                seen.add(seat)
+                seats.append(seat)
+        return [
+            {"playerId": self.player_id_at(seat), "rank": rank}
+            for rank, seat in enumerate(seats, start=1)
+        ]
 
     @property
     def current_player_id(self) -> str | None:

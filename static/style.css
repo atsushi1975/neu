@@ -1019,7 +1019,7 @@ body.room {
 
 .result-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
@@ -1035,6 +1035,27 @@ body.room {
 .result-row.winner {
   border: 1px solid rgba(240, 201, 106, 0.6);
   background: rgba(240, 201, 106, 0.14);
+}
+
+.result-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--gold-soft);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.result-rank-label {
+  font-size: 0.74rem;
+}
+
+.result-medal {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    sans-serif;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .result-name {

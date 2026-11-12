@@ -56,6 +56,12 @@ const LOG_ICONS = {
   info: "・",
 };
 
+const MEDALS = {
+  1: { emoji: "🥇", label: "金メダル" },
+  2: { emoji: "🥈", label: "銀メダル" },
+  3: { emoji: "🥉", label: "銅メダル" },
+};
+
 let session = readSession();
 let roomState = null;
 let youState = null;
@@ -735,6 +741,27 @@ function renderLastRound() {
   }, 6000);
 }
 
+function orderedResultRows(result) {
+  if (Array.isArray(result.standings) && result.standings.length) {
+    const rows = [];
+    for (const entry of result.standings) {
+      const player = gameState.players.find(
+        (candidate) => candidate.id === entry.playerId
+      );
+      if (player) rows.push({ player, rank: entry.rank });
+    }
+    if (rows.length) return rows;
+  }
+  // 古いサーバーが standings を返さないときの並び（生存者→チップ順→席順）。
+  return [...gameState.players]
+    .sort((a, b) => {
+      if (Boolean(a.alive) !== Boolean(b.alive)) return a.alive ? -1 : 1;
+      if (b.chips !== a.chips) return b.chips - a.chips;
+      return a.seat - b.seat;
+    })
+    .map((player, index) => ({ player, rank: index + 1 }));
+}
+
 function renderResult() {
   const result = gameState.result;
   if (!result) {
@@ -742,9 +769,8 @@ function renderResult() {
     return;
   }
 
-  const winner = gameState.players.find(
-    (player) => player.id === (result.winnerId || gameState.winnerId)
-  );
+  const winnerId = result.winnerId || gameState.winnerId;
+  const winner = gameState.players.find((player) => player.id === winnerId);
   const winnerName = result.winnerName || (winner && winner.name) || "?";
   const isMe = winner && winner.isMe;
   els.resultWinner.textContent = isMe
@@ -753,22 +779,27 @@ function renderResult() {
   els.resultMessage.textContent = result.message || "ゲーム終了";
 
   els.resultStandings.replaceChildren();
-  const standings = [...gameState.players].sort((a, b) => {
-    if (Boolean(a.alive) !== Boolean(b.alive)) return a.alive ? -1 : 1;
-    if (b.chips !== a.chips) return b.chips - a.chips;
-    return a.seat - b.seat;
-  });
-  for (const player of standings) {
+  for (const { player, rank } of orderedResultRows(result)) {
     const item = el(
       "li",
       "result-row" +
         (player.isMe ? " me" : "") +
-        (player.id === (result.winnerId || gameState.winnerId) ? " winner" : "")
+        (player.id === winnerId ? " winner" : "")
     );
+    const rankNode = el("span", "result-rank");
+    rankNode.append(el("span", "result-rank-label", `${rank}位`));
+    const medal = MEDALS[rank];
+    if (medal) {
+      const badge = el("span", "result-medal", medal.emoji);
+      badge.setAttribute("role", "img");
+      badge.setAttribute("aria-label", medal.label);
+      rankNode.append(badge);
+    }
+    item.append(rankNode);
     item.append(el("span", "result-name", player.isMe ? "あなた" : player.name));
     item.append(el("span", "result-chips", `チップ ${player.chips}`));
     if (!player.alive) item.append(el("span", "result-tag", "脱落"));
-    if (player.id === (result.winnerId || gameState.winnerId)) {
+    if (player.id === winnerId) {
       item.append(el("span", "result-tag win", "勝者"));
     }
     els.resultStandings.append(item);

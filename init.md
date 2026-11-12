@@ -368,6 +368,12 @@ python3 app.py --port 5001
   `reason`（`"no_playable_card"`）を持つ。負けた人の手札（旧 `revealedHand`）は返さない。
   イベントログの `round_end` も構造化結果から作る。
 
+- `result` はゲーム終了時だけ `{winnerId, winnerName, message, standings}` を返す（終了前は `null`）。
+  `standings` は1位から順に `{"playerId", "rank"}` を持つ。1位は勝者、2位以降は
+  `GameState.round_results` の `eliminated` が真の要素を後ろからたどった「脱落の逆順」
+  （最後に脱落した人が2位、最初に脱落した人が最下位）。脱落記録に載っていない人がいた場合は
+  席番号順で末尾に並べる。
+
 認証は `X-Player-Token`（または `Authorization: Bearer`）。トークンは localStorage の
 `neu:<roomId>` に保存する。
 
@@ -385,7 +391,9 @@ python3 app.py --port 5001
   - 自分の手札はカード画像。出せるカードは「出すと合計 XX」（`afterSum`）、101 超え（`busts`）は赤い「超過」バッジ。
   - ログは折りたたみ（既定は閉じる）。
   - ラウンド結果トーストは `lastRound.message` とチップ残り・脱落・次の最初の手番を1行で（手札は出さない）。
-  - ゲーム終了時は勝者とチップ順位をオーバーレイ表示。
+  - ゲーム終了時は勝者と順位をオーバーレイ表示。順位は1位=勝者、2位以降=脱落の逆順で、
+    各行に「1位」「2位」…を表示し、上位3人には 🥇🥈🥉 を添える（4位以降は順位の数字のみ）。
+    名前・チップ数・脱落/勝者タグ・自分の行の強調は従来どおり。360×640 で収まらない場合はカード内でスクロールする。
 - 対戦中は `body.in-game` で `100dvh` の縦 flex にし、390×844 と 360×640 で縦スクロールなしに収める。
 - 席は `static/table-layout.js` の `seatPosition(seat, mySeat, seatCount, {radiusX, radiusY, centerX, centerY})` で配置する。
   席の実寸を測って半径を決めるので、席が卓の枠からはみ出さない。`ResizeObserver` でサイズ変化時に再配置する。

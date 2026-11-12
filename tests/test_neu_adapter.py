@@ -15,6 +15,7 @@ from gameplatform import games as registry
 
 from games.neu import GAME, normalize_config
 from games.neu.adapter import NeuGame
+from neu.engine import from_dict, to_dict
 from tests.helpers import card, cards, make_state
 
 PLAYERS = [("p0", "Alice"), ("p1", "Bob"), ("p2", "Carol")]
@@ -339,6 +340,149 @@ class RoundEndTest(unittest.TestCase):
         self.assertEqual(round_ends[-1]["loserName"], "Bob")
         self.assertIsNone(round_ends[-1].get("cardId"))
         self.assertIsNone(round_ends[-1].get("sumAfter"))
+
+
+class StandingsTest(unittest.TestCase):
+    def make_finished_game(
+        self,
+        count: int,
+        winner: int,
+        round_results: list[dict],
+    ) -> NeuGame:
+        players = [(f"p{seat}", f"P{seat}") for seat in range(count)]
+        game = NeuGame(players, seed=1)
+        chips = [0] * count
+        chips[winner] = 1
+        game.state = make_state(
+            [cards("n1", "n2", "n3") for _ in range(count)],
+            chips=chips,
+            current=None,
+        )
+        game.state.phase = "game_over"
+        game.state.winner = winner
+        game.state.round_results = []
+        for index, entry in enumerate(round_results, start=1):
+            game.state.round_results.append(
+                {
+                    "round": entry.get("round", index),
+                    "loser": entry["loser"],
+                    "reason": "no_playable_card",
+                    "card_id": None,
+                    "sum_after": None,
+                    "sum": 0,
+                    "chips_left": 0 if entry.get("eliminated") else 1,
+                    "eliminated": bool(entry.get("eliminated")),
+                    "game_over": entry.get("loser") == winner,
+                    "winner": winner if entry.get("loser") == winner else None,
+                }
+            )
+        return game
+
+    def test_standings_follow_reverse_elimination_order(self):
+        game = self.make_finished_game(
+            4,
+            winner=3,
+            round_results=[
+                {"loser": 2, "eliminated": False},
+                {"loser": 0, "eliminated": True},
+                {"loser": 2, "eliminated": True},
+                {"loser": 1, "eliminated": True},
+            ],
+        )
+        result = game.result
+        self.assertEqual(result["winnerId"], "p3")
+        self.assertEqual(result["winnerName"], "P3")
+        self.assertEqual(result["message"], "P3 さんの勝ち！")
+        self.assertEqual(
+            result["standings"],
+            [
+                {"playerId": "p3", "rank": 1},
+                {"playerId": "p1", "rank": 2},
+                {"playerId": "p2", "rank": 3},
+                {"playerId": "p0", "rank": 4},
+            ],
+        )
+        # 公開ビューにもそのまま載る。
+        self.assertEqual(game.view("p0")["result"]["standings"], result["standings"])
+
+    def test_chained_eliminations_still_have_unique_ranks(self):
+        # 同じラウンドで席2 → 席0 → 席1 の順に脱落した場合。
+        game = self.make_finished_game(
+            4,
+            winner=3,
+            round_results=[
+                {"round": 5, "loser": 2, "eliminated": True},
+                {"round": 5, "loser": 0, "eliminated": True},
+                {"round": 5, "loser": 1, "eliminated": True},
+            ],
+        )
+        standings = game.result["standings"]
+        self.assertEqual(
+            [entry["playerId"] for entry in standings], ["p3", "p1", "p0", "p2"]
+        )
+        self.assertEqual([entry["rank"] for entry in standings], [1, 2, 3, 4])
+        self.assertEqual(len({entry["playerId"] for entry in standings}), 4)
+
+    def test_two_and_seven_players(self):
+        for count in (2, 7):
+            with self.subTest(count=count):
+                # 席番号と逆順（最後の席から順に脱落）させる。
+                eliminated = list(range(count - 1))  # 0, 1, ..., count-2
+                game = self.make_finished_game(
+                    count,
+                    winner=count - 1,
+                    round_results=[
+                        {"loser": seat, "eliminated": True}
+                        for seat in eliminated
+                    ],
+                )
+                standings = game.result["standings"]
+                expected_ids = [f"p{count - 1}"] + [
+                    f"p{seat}" for seat in reversed(eliminated)
+                ]
+                self.assertEqual(
+                    [entry["playerId"] for entry in standings], expected_ids
+                )
+                self.assertEqual(
+                    [entry["rank"] for entry in standings],
+                    list(range(1, count + 1)),
+                )
+
+    def test_unrecorded_players_are_appended_by_seat(self):
+        game = self.make_finished_game(
+            4,
+            winner=3,
+            round_results=[{"loser": 1, "eliminated": True}],
+        )
+        self.assertEqual(
+            [entry["playerId"] for entry in game.result["standings"]],
+            ["p3", "p1", "p0", "p2"],
+        )
+
+    def test_standings_survive_dict_roundtrip(self):
+        game = self.make_finished_game(
+            5,
+            winner=4,
+            round_results=[
+                {"loser": 3, "eliminated": True},
+                {"loser": 0, "eliminated": True},
+                {"loser": 2, "eliminated": True},
+                {"loser": 1, "eliminated": True},
+            ],
+        )
+        before = game.result["standings"]
+        data = json.loads(json.dumps(to_dict(game.state), ensure_ascii=False))
+        restored = NeuGame(game.players, seed=1)
+        restored.state = from_dict(data)
+        self.assertEqual(restored.result["standings"], before)
+
+    def test_result_is_none_before_game_over(self):
+        game = make_game(
+            [cards("n1", "n2", "n3")] * 3,
+            total=0,
+        )
+        self.assertIsNone(game.result)
+        self.assertIsNone(game.view("p0")["result"])
 
 
 class RandomPlayTest(unittest.TestCase):
