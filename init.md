@@ -73,6 +73,7 @@ tests/
   test_view.py      view_for / to_dict / from_dict
   test_neu_adapter.py アダプタ・公開 view・構造化ログ・ラウンド結果
   test_neu_cpu.py   CPU のカード選択・SHOT 指名・対戦の終了性
+  test_cpu_delay.py CPU の待ち時間（人間全員チップ0で0）の単体・結合テスト
   test_api.py       部屋作成→参加→開始→対戦→終了の API 結合
 init.md             このファイル
 README.md
@@ -306,7 +307,7 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 151 テスト（エンジン・アダプタ・CPU・API 結合）。
+現在 157 テスト（エンジン・アダプタ・CPU・待ち時間・API 結合）。
 
 ### CLI
 
@@ -539,6 +540,10 @@ python3 app.py --port 5001
 #### 待ち時間・乱数・名前
 - 待ち時間は犯人は踊ると同じく、共通基盤 `gameplatform.rooms.CPU_TURN_DELAY_SECONDS = 1.5` 秒。
   CPU スレッドが1手ごとに待つ方式で、テストではこの定数を 0 に差し替える。
+- 人間プレイヤー（id が `"cpu"` で始まらない人）が全員チップ0になると、CPU の待ち時間は 0 になる。
+  ゲーム側のフック `NeuGame.has_chips(player_id)`（エンジンの `PlayerState.chips > 0` を返す）を
+  共通基盤の `rooms._cpu_delay(room)` がロック内で確認し、`sleep` はロックの外で行う。
+  フックが無いゲーム（他リポジトリへの共通基盤コピー先）は従来どおり `CPU_TURN_DELAY_SECONDS` で待つ。
 - CPU は自前の `random.Random` を持ち、`CpuDriver(..., rng=random.Random(seed))` で再現できる。
 - 表示名は共通基盤の `_new_cpus` が付ける `CPU1`, `CPU2`, ...（人間と同じ名前は避ける）。
 

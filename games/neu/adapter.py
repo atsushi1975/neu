@@ -100,6 +100,12 @@ class NeuGame:
 
             raise InvalidAction("このゲームのプレイヤーではありません。") from None
 
+    def has_chips(self, player_id: str) -> bool:
+        """そのプレイヤーにチップが1枚以上残っているか（共通基盤の待ち時間用）。"""
+        if self.state is None:
+            return False
+        return self.state.players[self.seat_of(player_id)].chips > 0
+
     def start(self) -> None:
         if self.state is not None:
             raise ValueError("ゲームはすでに開始しています。")

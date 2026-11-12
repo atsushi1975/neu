@@ -202,9 +202,44 @@ def kick_cpus(room: Room) -> None:
     thread.start()
 
 
+def _cpu_delay(room: Room) -> float:
+    """CPU が次の1手を打つ前に待つ秒数を返す。
+
+    ゲームが ``has_chips(player_id)`` を実装していて、人間プレイヤーが
+    全員チップを失っている場合は 0 にして、CPU だけの進行を速く終わらせる。
+    フックが無いゲームや、チップが残っている人間がいるときは従来どおり
+    ``CPU_TURN_DELAY_SECONDS`` を返す。判定はロック内で行う。
+    """
+    with LOCK:
+        game = room.game
+        has_chips = getattr(game, "has_chips", None)
+        if not callable(has_chips):
+            return CPU_TURN_DELAY_SECONDS
+        humans = [
+            player
+            for player in room.players
+            if not str(player.get("id", "")).startswith("cpu")
+        ]
+        try:
+            if humans and all(not has_chips(player["id"]) for player in humans):
+                return 0.0
+        except Exception:
+            # フックが不正でも CPU スレッドを止めず、従来どおり待つ。
+            logger.exception(
+                "CPU の待ち時間判定に失敗したため既定値を使います。 room=%s",
+                room.id,
+            )
+        return CPU_TURN_DELAY_SECONDS
+
+
 def _run_cpus(room_id: str) -> None:
     while True:
-        time.sleep(CPU_TURN_DELAY_SECONDS)
+        with LOCK:
+            room = _rooms.get(room_id)
+            if room is None or room.cpu_driver is None or room.game is None:
+                return
+            delay = _cpu_delay(room)
+        time.sleep(delay)
         with LOCK:
             room = _rooms.get(room_id)
             if room is None or room.cpu_driver is None or room.game is None:
