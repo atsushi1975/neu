@@ -50,7 +50,7 @@ HEALTH_VERSION_CACHE: str | None = None
 def _health_version() -> str:
     """VERSION ファイルの内容（前後の空白は除く）。ファイルが無ければ "dev"。
 
-    Docker ビルド時に生成されるためリポジトリには置かない（.gitignore 済み）。
+    VERSION はリポジトリで管理する（.gitignore からは外す）。
     起動時に 1 回だけ読んでキャッシュする。
     """
     global HEALTH_VERSION_CACHE

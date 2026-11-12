@@ -10,6 +10,7 @@ from unittest.mock import patch
 from gameplatform import realtime, rooms
 from games.neu import CPU_NAMES
 from web import create_app
+from web.api import _health_version
 
 
 class ApiTest(unittest.TestCase):
@@ -263,10 +264,17 @@ class ApiTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["title"], "ノイ")
-        self.assertEqual(payload["version"], "dev")
+        self.assertEqual(payload["version"], "RELEASE1.0")
         self.assertIn(payload["status"], {"idle", "waiting", "playing"})
         self.assertIn("playing_rooms", payload)
         self.assertIn("neu", payload["games"])
+
+    def test_health_version_falls_back_to_dev_when_version_file_missing(self):
+        # VERSION ファイルが無い環境では version は "dev" にフォールバックする。
+        with patch("web.api.APP_ROOT", "/nonexistent-path-for-version-test"), patch(
+            "web.api.HEALTH_VERSION_CACHE", None
+        ):
+            self.assertEqual(_health_version(), "dev")
 
     def test_health_status_lifecycle(self):
         payload = self.client().get("/health").get_json()

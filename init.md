@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 1 | ゲームエンジン + テスト + CLI（標準ライブラリのみ） | 完了 |
 | 2 | Flask + スマホ向け Web UI（素の JS、複数人オンライン対戦） | 完了 |
-| 3 | Docker 化・共通ロビー (game-lobby) 登録・VPS 展開 | 未着手 |
+| 3 | Docker 化・共通ロビー (game-lobby) 登録・VPS 展開 | 完了 |
 | 4 | CPU プレイヤーの追加 | 完了 |
 
 ### 技術方針
@@ -311,7 +311,7 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 171 テスト（エンジン・アダプタ・CPU・CPU の名前・待ち時間・API 結合）。
+現在 207 テスト（エンジン・アダプタ・CPU・CPU の名前・待ち時間・API 結合）。
 
 ### CLI
 
@@ -421,7 +421,6 @@ python3 app.py --port 5001
 
 ### 未対応（フェーズ3以降）
 
-- Docker 化、共通ロビー登録、VPS 展開。
 - `back.png` / `chip.png` は未提供。裏面・チップは CSS で代替している。
 
 ---
@@ -491,7 +490,7 @@ python3 app.py --port 5001
   - [x] 候補不足時は `CPU{n}` にフォールバック
   - [x] 公開 view の `players[].isCpu` を追加（id 判定を `rooms.is_cpu_id` に集約）
   - [x] 席（バッジ行）と終了画面の順位表に文字「CPU」のバッジを表示（席は名前 / バッジ行 / チップの3段）
-- [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
+- [x] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開（RELEASE 1.0 で実施済み）
 
 ---
 
@@ -512,7 +511,7 @@ python3 app.py --port 5001
 - Docker 化する場合は `app.py` を gunicorn から起動する（`requirements.txt` に gunicorn あり）。
 - 共通ロビー (game-lobby) へは `GET /health` の
   `title` / `version` / `status` / `playing_rooms` をそのまま登録できる。
-- `VERSION` はビルド時に生成する想定で `.gitignore` 済み。無い場合 `/health` の version は `"dev"`。
+- `VERSION` はリポジトリで管理する（.gitignore からは外す）。無い場合 `/health` の version は `"dev"`。
 - `SECRET_KEY` は環境変数で設定する。未設定時は起動ごとのランダム値になる。
 - 共通ロビーへ戻るリンクは、同じホストのルート（既定ポート80）を指す。
 - ルームはメモリ上に保持する（`gameplatform.rooms`）。再起動で消えるため、永続化はフェーズ3以降の課題。
@@ -698,3 +697,17 @@ python3 app.py --port 5001
   CPU スレッド・SSE・退出判定から同じ遅延評価を通る。最終戦・中止時はタイマーを止める。
 - 次戦開始: アダプタは前戦ビリを最初のディーラーにして `new_game` を再生成。
   席固定は `NeuGame.players` の seat 順で維持。チップは新規ゲームと同じ `STARTING_CHIPS`。
+
+---
+
+## バージョン管理
+
+- バージョンはプロジェクト直下の `VERSION` を正とする。GET `/health` の `version` はその値。
+- 最初のリリース = `RELEASE1.0`。以降の小さな修正は `RELEASE1.0-01`, `RELEASE1.0-02`, …（2桁の連番）。
+- 大きな変更（遊び方や互換性が変わるもの）は `RELEASE1.1` のようにサブバージョンを上げる。
+- 修正のたびに `VERSION` を更新する。
+
+## バージョン履歴
+
+- `RELEASE1.0`: 最初のリリース。フェーズ2（Web UI / API）、退出システム（承認制）、CPU 対戦、
+  順位表示、連戦システム（通常戦 / 3・5・10 連戦）を含む。

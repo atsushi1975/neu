@@ -30,5 +30,4 @@ desktop.ini
 *.log
 instance/
 
-# ビルド時に生成される（リポジトリには置かない）
-VERSION
+# VERSION is tracked in the repository now (RELEASE1.0 / RELEASE1.0-xx scheme).

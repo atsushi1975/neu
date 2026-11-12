@@ -1,12 +1,15 @@
 # ノイ (Neu)
 
+> 作者: atsushi1975(Atsushi Sakamoto) / © 2026 All rights reserved([LICENSE](LICENSE))
+
 場の数字の合計が **101 を超えないように** カードを出し合うカードゲーム
 「ノイ (Neu)」のオンライン対戦実装です。
 
-フェーズ2と CPU 対戦まで完了しており、**Flask + 素の JavaScript** で
+**RELEASE 1.0** です。フェーズ2（Web UI）・退出システム（承認制）・CPU 対戦・順位表示・
+連戦システム（通常戦 / 3・5・10 連戦）まで実装済みで、**Flask + 素の JavaScript** で
 部屋作成 → 参加 → 開始 → 対戦 → 結果表示まで遊べます。
 人間に加えて CPU を最大6人まで参加させられます（人間＋CPUで2〜7人）。
-ルール判定は `neu/engine.py` に閉じており、UI / API 側では再実装していません。
+人間にも CPU にも同じ `legal_actions` / `apply` を通します。ルール判定は `neu/engine.py` に閉じており、UI / API 側では再実装していません。
 
 ## 必要なもの
 
@@ -53,6 +56,7 @@ python3 app.py --port 5001
 - ラウンド敗者はサーバーの `lastRound.message` とチップ残り・脱落・次の最初の手番をトースト表示（手札は出さない）
 - CPU が負けたトーストのタイトル、次が CPU のトースト本文、CPU の手番プロンプトに文字「CPU」のバッジを表示（人間だけなら従来どおり）
 - ゲーム終了時は勝者と脱落順の順位を表示（1位=勝者、上位3人に 🥇🥈🥉）
+- 連戦（通常戦 / 3・5・10 連戦）と試合内順位・積算順位・メダル（最終戦のメダル）
 - CPU の席のバッジ行と順位表の名前の横に、文字「CPU」のバッジを表示（「親」バッジと同形・色違い）
 - カード画像が無い場合の CSS 仮カード表示
 - CPU 対戦（開始時に人間＋CPUの合計が2〜7人になるよう選択）
@@ -100,7 +104,7 @@ python3 -m unittest discover
 node static/table-layout.test.js
 ```
 
-現在 171 テスト（エンジン・アダプタ・CPU・CPU の名前・API 結合）が通ります。
+現在 207 テスト（エンジン・アダプタ・CPU・CPU の名前・API 結合）が通ります。
 `tests/ui_check.py` は実ブラウザ（Playwright / Chromium）で対戦画面を確認する手動実行用スクリプトです（unittest の対象外）。
 
 ```bash
@@ -157,11 +161,10 @@ python3 -m neu.cli --players 4 --seed 1
 
 ## 未対応
 
-- Docker 化・共通ロビー登録・VPS 展開（フェーズ3）
 - `back.png` / `chip.png` は未提供（裏面・チップは CSS で代替）
 
 詳細なルール・設計・進捗は [init.md](init.md) を参照してください。
 
 ## ライセンス
 
-All rights reserved.（著作権者名は TODO）
+ライセンスは [LICENSE](LICENSE) を参照してください。
