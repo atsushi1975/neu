@@ -73,6 +73,7 @@ tests/
   test_view.py      view_for / to_dict / from_dict
   test_neu_adapter.py アダプタ・公開 view・構造化ログ・ラウンド結果
   test_neu_cpu.py   CPU のカード選択・SHOT 指名・対戦の終了性
+  test_cpu_names.py CPU の表示名（候補から選択・重複回避・フォールバック）と isCpu
   test_cpu_delay.py CPU の待ち時間（人間全員チップ0で0）の単体・結合テスト
   test_api.py       部屋作成→参加→開始→対戦→終了の API 結合
 init.md             このファイル
@@ -307,7 +308,7 @@ Action(player, card_index, target=None)
 python3 -m unittest discover
 ```
 
-現在 157 テスト（エンジン・アダプタ・CPU・待ち時間・API 結合）。
+現在 171 テスト（エンジン・アダプタ・CPU・CPU の名前・待ち時間・API 結合）。
 
 ### CLI
 
@@ -338,10 +339,12 @@ python3 app.py --port 5001
 
 - `hannin-wa-odoru` と同じ共通基盤（`gameplatform/` + `games/<key>/`）を使う。
 - `games/neu/__init__.py` で `GameDefinition(key="neu", title="ノイ", min_players=2, max_players=7)` を登録。
+  CPU の表示名の候補 `CPU_NAMES` を `cpu_names` に渡す（共通基盤の任意項目。指定しないゲームは従来どおり `CPU1`…）。
 - `games/neu/adapter.py` の `NeuGame` が `GameState` を保持し、`revision` / `phase` / `start()` を提供。
 - ルール判定はすべて `neu/engine.py` に委譲。API / UI 側で合法手や101超え判定を再実装しない。
 - カードの物理的な一意性は `cardId = "<カードID>#<copy>"`（例: `n10#3`）。画像名・ログには `Card.id` を使う。
 - 公開 view は他人の手札の中身を一切含まず、`me.hand` だけが中身を持つ。
+  `players` の各要素には `isCpu`（真偽値）があり、id が `"cpu"` で始まるかで判定する（名前は見ない）。
 - `events` は UI 用の構造化ログ（`seq` / `kind` / `playerId` / `cardId` / `sumAfter` / `targetId` など）。
 - `lastRound` はラウンド遷移を前後比較して生成し、敗者・合計・残りチップ・脱落・ゲーム終了を返す。
 
@@ -381,8 +384,11 @@ python3 app.py --port 5001
 
 - 画面に出すもの（対戦中）は次のとおり。それ以外の要素は足さない。
   - ヘッダ: 「ノイ」・ルームID・コピー・退出・ラウンド番号（ラウンド番号はここ1か所だけ）。
-  - 楕円の卓: 各席は名前（長いときは省略）・チップ数・親の印・手番ハイライト・DOUBLE 中の手番の人だけ「あとN枚」。
-    自分は下中央、他は席番号の増加＝画面上の時計回りに等間隔。脱落者は席を残して暗くする。
+  - 楕円の卓: 各席は「名前（長いときは省略） / バッジ行（親・CPU） / チップ数」の3段。
+    バッジ行はバッジが無い席でも同じ高さを確保し、親が移動しても席の大きさ・位置が変わらない。
+    CPU の席はバッジ行に文字「CPU」のバッジ（`.player-tag.cpu`。色だけ「親」と区別）を出す。
+    手番ハイライト・DOUBLE 中の手番の人だけ「あとN枚」も従来どおり。自分は下中央、他は席番号の増加＝画面上の時計回りに等間隔。
+    脱落者は席を残して暗くする。
   - 回る向きは「↻ 時計回り」「↺ 反時計回り」の文字1か所だけ（ステータス帯）。矢印の図形・回転アニメーションは作らない。
   - 場の合計は卓の中央に1か所だけ（`gameState.sum` をそのまま常時更新）。
   - 場札は一番上の1枚だけを傾けず重ねずに表示し、下に「場札 N枚」。空のときは「なし」。
@@ -391,9 +397,12 @@ python3 app.py --port 5001
   - 自分の手札はカード画像。出せるカードは「出すと合計 XX」（`afterSum`）、101 超え（`busts`）は赤い「超過」バッジ。
   - ログは折りたたみ（既定は閉じる）。
   - ラウンド結果トーストは `lastRound.message` とチップ残り・脱落・次の最初の手番を1行で（手札は出さない）。
+    負けた人・次の最初の手番が CPU のときは、名前の直後に文字「CPU」のバッジをインライン表示する
+    （`message` は変更せず、`loserName` で始まるときだけクライアントで名前部分と残りに分ける）。
   - ゲーム終了時は勝者と順位をオーバーレイ表示。順位は1位=勝者、2位以降=脱落の逆順で、
     各行に「1位」「2位」…を表示し、上位3人には 🥇🥈🥉 を添える（4位以降は順位の数字のみ）。
-    名前・チップ数・脱落/勝者タグ・自分の行の強調は従来どおり。360×640 で収まらない場合はカード内でスクロールする。
+    名前・チップ数・脱落/勝者タグ・自分の行の強調は従来どおり。CPU の行は名前の横に文字「CPU」のバッジを付ける。
+    360×640 で収まらない場合はカード内でスクロールする。
 - 対戦中は `body.in-game` で `100dvh` の縦 flex にし、390×844 と 360×640 で縦スクロールなしに収める。
 - 席は `static/table-layout.js` の `seatPosition(seat, mySeat, seatCount, {radiusX, radiusY, centerX, centerY})` で配置する。
   席の実寸を測って半径を決めるので、席が卓の枠からはみ出さない。`ResizeObserver` でサイズ変化時に再配置する。
@@ -401,7 +410,9 @@ python3 app.py --port 5001
 - SHOT は、手札の SHOT をタップしてから、円形卓上で `targets` に該当する席をタップして出す。
 - DOUBLE 中の1枚目はサーバーが合法手から除外し、UI でも「1枚目に出せません」と表示する。
 - 手番が回ってきたらプロンプト・ページタイトル・（対応端末では）振動で通知。
+  プロンプトで手番の人が CPU のときは、名前の直後に文字「CPU」のバッジをインライン表示する。
 - ラウンド敗者はサーバーの `lastRound.message` をそのままトースト表示（負けた人の手札は表示しない）。
+  CPU が負けたときは名前の直後に、次が CPU のときは本文の名前に文字「CPU」のバッジを付ける。
 - 他人の手札の中身・枚数は表示しない。山札の裏面は CSS で描画する（`back.png` は未提供）。
 - 画像が404でも CSS の仮カードで遊べる（`onerror` で画像を隠す）。
 
@@ -471,6 +482,12 @@ python3 app.py --port 5001
   - [x] 開始UIに「ゲーム開始 ▾」のCPU人数選択を追加（人間＋CPUで2〜7人）
   - [x] CPU のカード選択・SHOT 指名・DOUBLE・ラウンド負けを含むテスト
   - [x] CPU混じりの API 対戦が最後まで終わることを確認
+- [x] CPU の名前とバッジ（2026-11）
+  - [x] `GameDefinition.cpu_names`（任意）を追加。未指定のゲームは従来どおり `CPU1`…
+  - [x] ノイの `CPU_NAMES` から重複なしでランダムに選択（人間の名前は大文字小文字・空白を無視して除外）
+  - [x] 候補不足時は `CPU{n}` にフォールバック
+  - [x] 公開 view の `players[].isCpu` を追加（id 判定を `rooms.is_cpu_id` に集約）
+  - [x] 席（バッジ行）と終了画面の順位表に文字「CPU」のバッジを表示（席は名前 / バッジ行 / チップの3段）
 - [ ] フェーズ3: Docker 化 / 共通ロビー登録 / VPS 展開
 
 ---
@@ -553,7 +570,13 @@ python3 app.py --port 5001
   共通基盤の `rooms._cpu_delay(room)` がロック内で確認し、`sleep` はロックの外で行う。
   フックが無いゲーム（他リポジトリへの共通基盤コピー先）は従来どおり `CPU_TURN_DELAY_SECONDS` で待つ。
 - CPU は自前の `random.Random` を持ち、`CpuDriver(..., rng=random.Random(seed))` で再現できる。
-- 表示名は共通基盤の `_new_cpus` が付ける `CPU1`, `CPU2`, ...（人間と同じ名前は避ける）。
+- 表示名は共通基盤の `_new_cpus` が付ける。ゲームの `GameDefinition.cpu_names` に候補があれば、
+  その中から重複なしでランダムに選ぶ（人間の名前と同じ候補は、大文字小文字・前後の空白を無視して除外）。
+  候補が足りない場合は `CPU1`, `CPU2`, ... にフォールバックする。候補を渡さないゲームは従来どおり `CPU1`…。
+  ノイの候補は `games/neu/__init__.py` の `CPU_NAMES` に集約している。
+  名前の選択はモジュールレベルの `rooms._cpu_name_rng` を使うため、テストでは seed を固定できる。
+- CPU かどうかは名前ではなく id で判定する。共通基盤の `rooms.is_cpu_id(player_id)`（id の先頭が `"cpu"`）を
+  待ち時間・退出・中止・公開 view の `isCpu` で共用し、判定を重複させない。
 
 ---
 
@@ -587,4 +610,5 @@ python3 app.py --port 5001
 - `gameplatform/rooms.py` の `_now()` はテストから差し替え可能な時計。`EXIT_*` 定数もモジュール属性として差し替え可能。
 - 中止後も `/health` の `playing_rooms` が正しくなるよう、`_is_finished` を使う。
 - CPU プレイヤーの id は `"cpu"` で始める必要がある（`_new_cpus` が `"cpu-..."` を生成）。
+  判定は `rooms.is_cpu_id(player_id)` に集約している（名前ではなく id）。
 - `notice` / `exit_seq` / `notice_seq` はリセット後も残す（通知が消えないように）。

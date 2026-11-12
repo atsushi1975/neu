@@ -110,6 +110,10 @@ function el(tag, className, text) {
   return node;
 }
 
+function cpuBadge() {
+  return el("span", "player-tag cpu", "CPU");
+}
+
 function showError(message) {
   els.error.textContent = message;
   clearTimeout(errorTimer);
@@ -288,10 +292,27 @@ function isMyTurn() {
   );
 }
 
+function playerById(playerId) {
+  if (!gameState) return null;
+  return gameState.players.find((candidate) => candidate.id === playerId) || null;
+}
+
 function playerName(playerId) {
-  if (!gameState) return "?";
-  const player = gameState.players.find((candidate) => candidate.id === playerId);
+  const player = playerById(playerId);
   return player ? player.name : "?";
+}
+
+// 文章の流れの中に「名前 +（CPU なら）文字バッジ」を並べる。
+// name を省略したときは gameState.players から引く。
+function appendPlayerName(parent, playerId, name) {
+  const player = playerById(playerId);
+  parent.append(
+    document.createTextNode(name !== undefined ? name : player ? player.name : "?")
+  );
+  if (player && player.isCpu) {
+    parent.append(document.createTextNode(" "));
+    parent.append(cpuBadge());
+  }
 }
 
 function cardImagePath(cardId) {
@@ -397,8 +418,13 @@ function renderPlayers() {
 
     const nameRow = el("div", "player-name-row");
     nameRow.append(el("span", "player-name", player.isMe ? "あなた" : player.name));
-    if (player.isDealer) nameRow.append(el("span", "player-tag dealer", "親"));
     tile.append(nameRow);
+
+    // バッジ行はバッジが無い席でも高さを確保し、親の移動で席の大きさが変わらないようにする。
+    const badgeRow = el("div", "player-badges");
+    if (player.isDealer) badgeRow.append(el("span", "player-tag dealer", "親"));
+    if (player.isCpu) badgeRow.append(cpuBadge());
+    tile.append(badgeRow);
 
     const chips = el("p", "player-chips");
     chips.append(el("span", "chip-mark", "●"));
@@ -529,11 +555,19 @@ function renderPrompt() {
   const current = gameState.currentPlayerId
     ? playerName(gameState.currentPlayerId)
     : "?";
-  const waitText =
-    gameState.cardsRemaining >= 2
-      ? `${current} さんの番です（2枚出し）。`
-      : `${current} さんの番です。`;
-  els.prompt.textContent = waitText;
+  els.prompt.replaceChildren();
+  if (gameState.currentPlayerId) {
+    appendPlayerName(els.prompt, gameState.currentPlayerId, current);
+  } else {
+    els.prompt.textContent = current;
+  }
+  els.prompt.append(
+    document.createTextNode(
+      gameState.cardsRemaining >= 2
+        ? " さんの番です（2枚出し）。"
+        : " さんの番です。"
+    )
+  );
 }
 
 function handCardNote(card, myTurn) {
@@ -718,16 +752,43 @@ function renderLastRound() {
   // ゲーム終了時は、勝者発表（renderResult）を優先する。
   if (lastRound.gameOver) return;
 
-  els.toastTitle.textContent = lastRound.message || "";
+  // タイトルは「負けた人の名前 +（CPU なら）バッジ + 残りの文」に分ける。
+  // サーバーが作る message は変えず、loserName で始まるときだけ分割する。
+  const message = lastRound.message || "";
+  const loserName =
+    lastRound.loserName ||
+    (lastRound.loserId ? playerName(lastRound.loserId) : "");
+  els.toastTitle.replaceChildren();
+  if (loserName && message.startsWith(loserName)) {
+    appendPlayerName(els.toastTitle, lastRound.loserId, loserName);
+    els.toastTitle.append(
+      document.createTextNode(message.slice(loserName.length))
+    );
+  } else {
+    els.toastTitle.textContent = message;
+  }
+
   const bits = [];
   if (lastRound.chipsLeft !== null && lastRound.chipsLeft !== undefined) {
     bits.push(`チップ残り ${lastRound.chipsLeft}`);
   }
   if (lastRound.eliminated) bits.push("脱落");
   if (lastRound.nextRound && lastRound.nextRound.firstPlayer) {
-    bits.push(`次は ${playerName(lastRound.nextRound.firstPlayer)} さん`);
+    const next = document.createDocumentFragment();
+    next.append(document.createTextNode("次は "));
+    appendPlayerName(next, lastRound.nextRound.firstPlayer);
+    next.append(document.createTextNode(" さん"));
+    bits.push(next);
   }
-  els.toastBody.textContent = bits.join(" ／ ");
+  els.toastBody.replaceChildren();
+  bits.forEach((bit, index) => {
+    if (index > 0) els.toastBody.append(document.createTextNode(" ／ "));
+    if (typeof bit === "string") {
+      els.toastBody.append(document.createTextNode(bit));
+    } else {
+      els.toastBody.append(bit);
+    }
+  });
   els.toast.classList.toggle("danger", Boolean(lastRound.eliminated));
   els.toast.hidden = false;
   els.toast.classList.remove("show");
@@ -796,7 +857,12 @@ function renderResult() {
       rankNode.append(badge);
     }
     item.append(rankNode);
-    item.append(el("span", "result-name", player.isMe ? "あなた" : player.name));
+    const nameCell = el("span", "result-name");
+    nameCell.append(
+      el("span", "result-name-text", player.isMe ? "あなた" : player.name)
+    );
+    if (player.isCpu) nameCell.append(cpuBadge());
+    item.append(nameCell);
     item.append(el("span", "result-chips", `チップ ${player.chips}`));
     if (!player.alive) item.append(el("span", "result-tag", "脱落"));
     if (player.id === winnerId) {

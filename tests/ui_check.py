@@ -47,8 +47,13 @@ def api_create_room(name: str) -> tuple[str, str, str]:
     return created["roomId"], created["playerId"], created["token"]
 
 
-def api_start(room_id: str, token: str) -> None:
-    api_request("POST", f"/api/rooms/{room_id}/start", {}, token=token)
+def api_start(room_id: str, token: str, cpu_count: int = 0) -> None:
+    api_request(
+        "POST",
+        f"/api/rooms/{room_id}/start",
+        {"cpuCount": cpu_count},
+        token=token,
+    )
 
 
 def api_state(room_id: str, token: str) -> dict:
@@ -202,6 +207,346 @@ def check_seats(page, expected_count: int) -> None:
             )
 
 
+def check_seat_structure(page, expected_cpu_count: int) -> None:
+    """席が「名前 / バッジ行 / チップ」の3段になっていることを確認する。"""
+    data = page.evaluate(
+        """() => {
+          const tiles = [...document.querySelectorAll('#players .player')];
+          return tiles.map((tile) => {
+            const name = tile.querySelector('.player-name');
+            const badges = tile.querySelector('.player-badges');
+            const chips = tile.querySelector('.player-chips');
+            const dealer = tile.querySelector('.player-tag.dealer');
+            const cpu = tile.querySelector('.player-tag.cpu');
+            const badgeRect = badges ? badges.getBoundingClientRect() : null;
+            return {
+              playerId: tile.dataset.playerId,
+              order: [...tile.children].map((child) => child.className),
+              nameText: name ? name.textContent : null,
+              nameClientWidth: name ? name.clientWidth : null,
+              nameScrollWidth: name ? name.scrollWidth : null,
+              badgeRowHeight: badgeRect ? badgeRect.height : null,
+              dealerText: dealer ? dealer.textContent : null,
+              dealerInBadges: Boolean(dealer && badges && badges.contains(dealer)),
+              cpuText: cpu ? cpu.textContent : null,
+              cpuInBadges: Boolean(cpu && badges && badges.contains(cpu)),
+              hasEmoji: (tile.textContent || '').includes('🤖'),
+              chipsText: chips ? chips.textContent.trim() : null,
+            };
+          });
+        }"""
+    )
+    assert data, "席が1つも描画されていません"
+
+    for seat in data:
+        label = seat["playerId"]
+        assert seat["order"][:3] == ["player-name-row", "player-badges", "player-chips"], (
+            f"席の3段構造が不正です: {label} / {seat['order']}"
+        )
+        assert seat["chipsText"] is not None, f"チップ表示がありません: {label}"
+        assert not seat["hasEmoji"], f"席に 🤖 が残っています: {label}"
+
+    cpu_seats = [seat for seat in data if seat["cpuText"]]
+    assert len(cpu_seats) == expected_cpu_count, (
+        f"CPU バッジの数が {expected_cpu_count} でない: {len(cpu_seats)}"
+    )
+    for seat in cpu_seats:
+        assert seat["cpuText"] == "CPU", f"CPU バッジの文字が不正です: {seat['cpuText']}"
+        assert seat["cpuInBadges"], f"CPU バッジがバッジ行にありません: {seat['playerId']}"
+
+    dealer_seats = [seat for seat in data if seat["dealerText"]]
+    assert len(dealer_seats) == 1, f"「親」バッジが1個ではありません: {dealer_seats}"
+    assert dealer_seats[0]["dealerText"] == "親", f"「親」バッジの文字が不正です: {dealer_seats[0]}"
+    assert dealer_seats[0]["dealerInBadges"], "「親」バッジがバッジ行にありません"
+
+    # バッジの有無にかかわらず、バッジ行の高さは全席で同じ。
+    heights = [seat["badgeRowHeight"] for seat in data]
+    assert all(height and height > 0 for height in heights), f"バッジ行の高さが取れません: {heights}"
+    assert max(heights) - min(heights) < 0.5, f"バッジ行の高さが席ごとに違います: {heights}"
+
+    # 短い名前（CPU 名を含む）は省略されずに全部見える。
+    for seat in data:
+        name = seat["nameText"] or ""
+        if len(name) <= 4:
+            assert seat["nameScrollWidth"] <= seat["nameClientWidth"], (
+                f"名前が省略されています: {name!r} "
+                f"(client={seat['nameClientWidth']} scroll={seat['nameScrollWidth']})"
+            )
+
+
+def check_badge_same_row(page) -> None:
+    """CPU を親にしたときも「親」と「CPU」が同じ行に横並びになることを確認する。"""
+    data = page.evaluate(
+        """() => {
+          const cpu = gameState.players.find((player) => player.isCpu);
+          if (!cpu) return null;
+          const previous = gameState.players.map((player) => player.isDealer);
+          gameState.players.forEach((player) => { player.isDealer = player.id === cpu.id; });
+          renderPlayers();
+          const tile = [...document.querySelectorAll('#players .player')]
+            .find((item) => item.dataset.playerId === cpu.id);
+          const dealer = tile && tile.querySelector('.player-tag.dealer');
+          const badge = tile && tile.querySelector('.player-tag.cpu');
+          const row = tile && tile.querySelector('.player-badges');
+          const tileRect = tile ? tile.getBoundingClientRect() : null;
+          const dealerRect = dealer ? dealer.getBoundingClientRect() : null;
+          const cpuRect = badge ? badge.getBoundingClientRect() : null;
+          const rowRect = row ? row.getBoundingClientRect() : null;
+          const result = {
+            found: Boolean(dealer && badge && row),
+            sameTop: dealerRect && cpuRect
+              ? Math.abs(dealerRect.top - cpuRect.top) < 1
+              : false,
+            gap: dealerRect && cpuRect ? cpuRect.left - dealerRect.right : null,
+            rowHeight: rowRect ? rowRect.height : null,
+            insideTile: Boolean(
+              tileRect && dealerRect && cpuRect &&
+              dealerRect.left >= tileRect.left - 0.5 &&
+              cpuRect.right <= tileRect.right + 0.5
+            ),
+          };
+          gameState.players.forEach((player, index) => { player.isDealer = previous[index]; });
+          renderPlayers();
+          return result;
+        }"""
+    )
+    assert data and data["found"], "CPU の席で「親」と「CPU」のバッジが見つかりません"
+    assert data["sameTop"], "「親」と「CPU」が同じ行に並んでいません"
+    assert data["gap"] is not None and data["gap"] >= 0, f"バッジのすき間が不正です: {data}"
+    assert data["rowHeight"] and data["rowHeight"] < 24, (
+        f"バッジ行が折り返して高くなっています: {data['rowHeight']}"
+    )
+    assert data["insideTile"], f"バッジが席からはみ出しています: {data}"
+
+
+def check_dealer_move_stable(page) -> None:
+    """親を別の席へ動かしても、席の大きさ・位置が変わらないことを確認する。"""
+    def measure() -> dict:
+        return {tile["playerId"]: tile for tile in seat_boxes(page)["tiles"]}
+
+    before = measure()
+    original = page.evaluate(
+        """() => {
+          const index = gameState.players.findIndex((player) => player.isDealer);
+          const next = (index + 1) % gameState.players.length;
+          gameState.players.forEach((player, i) => { player.isDealer = i === next; });
+          renderPlayers();
+          return index;
+        }"""
+    )
+    page.wait_for_timeout(100)
+    after = measure()
+    try:
+        for player_id, before_tile in before.items():
+            after_tile = after[player_id]
+            for key in ("width", "height"):
+                assert abs(before_tile["box"][key] - after_tile["box"][key]) < 0.5, (
+                    f"親の移動で席の {key} が変わりました: {player_id} "
+                    f"{before_tile['box'][key]} -> {after_tile['box'][key]}"
+                )
+            for key in ("x", "y"):
+                assert abs(before_tile["box"][key] - after_tile["box"][key]) < 0.5, (
+                    f"親の移動で席の位置が変わりました: {player_id} "
+                    f"{before_tile['box'][key]} -> {after_tile['box'][key]}"
+                )
+    finally:
+        page.evaluate(
+            """(index) => {
+              gameState.players.forEach((player, i) => { player.isDealer = i === index; });
+              renderPlayers();
+            }""",
+            original,
+        )
+
+
+def check_long_name(page) -> None:
+    """16文字の名前でも席からはみ出さない（必要なら省略される）ことを確認する。"""
+    data = page.evaluate(
+        """() => {
+          const player = gameState.players.find((item) => !item.isMe);
+          if (!player) return null;
+          const previous = player.name;
+          player.name = 'あ'.repeat(16);
+          renderPlayers();
+          const tile = [...document.querySelectorAll('#players .player')]
+            .find((item) => item.dataset.playerId === player.id);
+          const name = tile.querySelector('.player-name');
+          const tileRect = tile.getBoundingClientRect();
+          const nameRect = name.getBoundingClientRect();
+          const tableRect = document.getElementById('table').getBoundingClientRect();
+          const result = {
+            tileInsideTable:
+              tileRect.left >= tableRect.left - 1 &&
+              tileRect.right <= tableRect.right + 1 &&
+              tileRect.top >= tableRect.top - 1 &&
+              tileRect.bottom <= tableRect.bottom + 1,
+            tileInsideScreen:
+              tileRect.left >= -1 &&
+              tileRect.right <= window.innerWidth + 1 &&
+              tileRect.top >= -1 &&
+              tileRect.bottom <= window.innerHeight + 1,
+            nameWithinTile:
+              nameRect.left >= tileRect.left - 0.5 &&
+              nameRect.right <= tileRect.right + 0.5,
+            truncated: name.scrollWidth > name.clientWidth,
+          };
+          player.name = previous;
+          renderPlayers();
+          return result;
+        }"""
+    )
+    assert data, "長い名前の確認用プレイヤーが見つかりません"
+    assert data["tileInsideTable"], f"16文字の名前で席が卓からはみ出しました: {data}"
+    assert data["tileInsideScreen"], f"16文字の名前で席が画面からはみ出しました: {data}"
+    assert data["nameWithinTile"], f"16文字の名前が席からはみ出しました: {data}"
+
+
+def check_result_cpu_badge(page) -> None:
+    """終了画面の順位表に CPU の文字バッジが出ることを、終了状態を差し替えて確認する。"""
+    prepared = page.evaluate(
+        """() => {
+             const players = (gameState && gameState.players) || [];
+             const cpu = players.find((player) => player.isCpu);
+             const human = players.find((player) => player.isMe);
+             if (!cpu || !human) return false;
+             gameState.result = {
+               winnerId: cpu.id,
+               winnerName: cpu.name,
+               message: `${cpu.name} さんの勝ち！`,
+               standings: [
+                 { playerId: cpu.id, rank: 1 },
+                 { playerId: human.id, rank: 2 },
+               ],
+             };
+             renderResult();
+             return true;
+           }"""
+    )
+    assert prepared, "終了画面の確認用に CPU と自分の席が見つかりません"
+    badges = page.locator("#result-standings .result-row .player-tag.cpu")
+    assert badges.count() == 1, f"終了画面の CPU バッジが1個ではありません: {badges.count()}"
+    text = badges.first.inner_text()
+    assert text == "CPU", f"終了画面の CPU バッジの文字が不正です: {text}"
+    assert page.locator("#result-standings").get_by_text("🤖").count() == 0, (
+        "終了画面に 🤖 が残っています"
+    )
+    name_order = page.evaluate(
+        """() => {
+             const row = document.querySelector('#result-standings .result-row');
+             if (!row) return null;
+             const name = row.querySelector('.result-name');
+             const badge = row.querySelector('.result-name .player-tag.cpu');
+             return { hasName: Boolean(name), badgeInName: Boolean(badge) };
+           }"""
+    )
+    assert name_order and name_order["hasName"] and name_order["badgeInName"], (
+        f"終了画面の CPU バッジが名前の横にありません: {name_order}"
+    )
+
+
+def check_cpu_toast(page) -> None:
+    """CPU が負け、次も CPU のときのトーストを、状態を差し替えて確認する。"""
+    data = page.evaluate(
+        """() => {
+          const previousRound = gameState.lastRound;
+          const previousKey = lastRoundKey;
+          const cpu = gameState.players.find((player) => player.isCpu);
+          if (!cpu) return null;
+          gameState.lastRound = {
+            round: 999,
+            loserId: cpu.id,
+            loserName: cpu.name,
+            message: `${cpu.name} さんは出せるカードがすべて101を超えるため負け`,
+            chipsLeft: 2,
+            eliminated: false,
+            gameOver: false,
+            nextRound: { round: 1000, firstPlayer: cpu.id, sum: 0 },
+          };
+          lastRoundKey = null;
+          renderLastRound();
+          const toast = document.getElementById('last-round-toast');
+          const title = document.getElementById('toast-title');
+          const body = document.getElementById('toast-body');
+          const titleBadge = title.querySelector('.player-tag.cpu');
+          const bodyBadge = body.querySelector('.player-tag.cpu');
+          const badgeIndex = titleBadge
+            ? [...title.childNodes].indexOf(titleBadge)
+            : -1;
+          const textBeforeBadge = [...title.childNodes]
+            .slice(0, Math.max(0, badgeIndex))
+            .map((node) => node.textContent)
+            .join('');
+          const rect = toast.getBoundingClientRect();
+          const result = {
+            visible: !toast.hidden && toast.classList.contains('show'),
+            titleText: title.textContent,
+            bodyText: body.textContent,
+            titleBadge: Boolean(titleBadge),
+            bodyBadge: Boolean(bodyBadge),
+            titleBadgeAfterName: textBeforeBadge === `${cpu.name} `,
+            titleTextOrder: title.textContent ===
+              `${cpu.name} CPU さんは出せるカードがすべて101を超えるため負け`,
+            bodyTextOrder: body.textContent.includes(`次は ${cpu.name} CPU さん`),
+            insideViewport:
+              rect.left >= -1 && rect.right <= window.innerWidth + 1 &&
+              rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+            noHands: toast.querySelectorAll('.small-card').length === 0,
+          };
+          gameState.lastRound = previousRound;
+          lastRoundKey = previousKey;
+          return result;
+        }"""
+    )
+    assert data, "トースト確認用の CPU が見つかりません"
+    assert data["visible"], f"CPU のトーストが表示されていません: {data}"
+    assert data["titleBadge"], f"トーストのタイトルに CPU バッジがありません: {data}"
+    assert data["bodyBadge"], f"トーストの本文に CPU バッジがありません: {data}"
+    assert data["titleBadgeAfterName"], f"CPU バッジが名前の直後にありません: {data}"
+    assert data["titleTextOrder"], f"トーストのタイトルが崩れています: {data['titleText']}"
+    assert data["bodyTextOrder"], f"トーストの本文が崩れています: {data['bodyText']}"
+    assert data["insideViewport"], f"トーストが画面からはみ出しています: {data}"
+    assert data["noHands"], "トーストに手札が表示されています"
+    print(f"[toast] タイトル: {data['titleText']} / 本文: {data['bodyText']}")
+
+
+def check_cpu_prompt(page) -> None:
+    """手番の案内に CPU の文字バッジが出ることを確認する。"""
+    data = page.evaluate(
+        """() => {
+          const previous = gameState.currentPlayerId;
+          const cpu = gameState.players.find((player) => player.isCpu);
+          if (!cpu) return null;
+          gameState.currentPlayerId = cpu.id;
+          renderPrompt();
+          const prompt = document.getElementById('prompt');
+          const badge = prompt.querySelector('.player-tag.cpu');
+          const badgeIndex = badge ? [...prompt.childNodes].indexOf(badge) : -1;
+          const textBeforeBadge = [...prompt.childNodes]
+            .slice(0, Math.max(0, badgeIndex))
+            .map((node) => node.textContent)
+            .join('');
+          const lineHeight = parseFloat(getComputedStyle(prompt).lineHeight) || 20;
+          const result = {
+            badge: Boolean(badge),
+            text: prompt.textContent,
+            textOrder:
+              prompt.textContent.includes(`${cpu.name} CPU さん`) &&
+              prompt.textContent.includes('の番です'),
+            badgeAfterName: textBeforeBadge === `${cpu.name} `,
+            lines: Math.round(prompt.getBoundingClientRect().height / lineHeight),
+          };
+          gameState.currentPlayerId = previous;
+          renderPrompt();
+          return result;
+        }"""
+    )
+    assert data, "プロンプト確認用の CPU が見つかりません"
+    assert data["badge"], f"手番の案内に CPU バッジがありません: {data}"
+    assert data["textOrder"], f"手番の案内の文言が崩れています: {data['text']}"
+    assert data["badgeAfterName"], f"CPU バッジが名前の直後にありません: {data}"
+    assert data["lines"] <= 2, f"手番の案内が {data['lines']} 行になっています"
+
+
 def get_sum_elements(page) -> list[dict]:
     return page.evaluate(
         """() => [...document.querySelectorAll('#table-sum, .summary, #summary-sum')]
@@ -277,6 +622,10 @@ def check_toast(page) -> None:
     text = page.locator("#toast-body").inner_text()
     title = page.locator("#toast-title").inner_text()
     assert "負け" in f"{title} {text}", f"ラウンド負けのトーストの内容が不正です: {title} / {text}"
+    # 人間だけの対戦では、トーストに CPU バッジは出ない。
+    assert page.locator("#last-round-toast .player-tag.cpu").count() == 0, (
+        "人間だけの対戦のトーストに CPU バッジが表示されています"
+    )
 
 
 def play_until_round_end(players: list[PlayerPage], room_id: str, max_steps: int = 400) -> dict:
@@ -350,6 +699,9 @@ def run_scenario(browser, players_count: int, viewport: tuple[int, int], tag: st
 
     wait_for_game(host.page)
     check_seats(host.page, players_count)
+    check_seat_structure(host.page, 0)
+    check_dealer_move_stable(host.page)
+    check_long_name(host.page)
 
     game = api_state(room_id, host.token)["game"]
     sum_text = host.page.locator("#table-sum").inner_text()
@@ -400,6 +752,63 @@ def run_scenario(browser, players_count: int, viewport: tuple[int, int], tag: st
         check_toast(host.page)
         print(f"[{tag}] ラウンド終了トースト確認: {host.page.locator('#toast-body').inner_text()}")
     for context in contexts:
+        context.close()
+
+
+def run_cpu_scenario(
+    browser, cpu_count: int, viewport: tuple[int, int], tag: str
+) -> None:
+    """CPU の文字バッジ（席・終了画面）と席の3段構造を確認する。"""
+    context = new_context(browser, viewport)
+    try:
+        host = PlayerPage(context, f"ホスト{tag}")
+        room_id, host_pid, host_token = api_create_room(f"ホスト{tag}")
+        host.adopt_session(room_id, host_token, host_pid, host.name)
+
+        api_start(room_id, host_token, cpu_count=cpu_count)
+        wait_for_game(host.page)
+        expected_players = 1 + cpu_count
+        check_seats(host.page, expected_players)
+
+        game = api_state(room_id, host.token)["game"]
+        cpu_players = [player for player in game["players"] if player["isCpu"]]
+        human_players = [player for player in game["players"] if not player["isCpu"]]
+        assert len(cpu_players) == cpu_count, f"CPU の人数が不正です: {cpu_players}"
+        assert [player["id"] for player in human_players] == [host.player_id], (
+            f"人間の isCpu が偽になっていません: {human_players}"
+        )
+
+        dealer = next(player for player in game["players"] if player.get("isDealer"))
+        print(f"[{tag}] 親: {'CPU' if dealer['isCpu'] else '人間'} / {dealer['name']}")
+
+        check_seat_structure(host.page, cpu_count)
+        check_badge_same_row(host.page)
+        check_dealer_move_stable(host.page)
+        check_long_name(host.page)
+        check_cpu_prompt(host.page)
+        check_screen_fit(host.page)
+        screenshot = take_screenshot(host.page, f"{tag}_{viewport[0]}x{viewport[1]}")
+        print(f"[{tag}] スクリーンショット: {screenshot}")
+
+        check_cpu_toast(host.page)
+        toast_screenshot = take_screenshot(
+            host.page, f"{tag}_toast_{viewport[0]}x{viewport[1]}"
+        )
+        print(f"[{tag}] トースト スクリーンショット: {toast_screenshot}")
+        host.page.evaluate(
+            """() => {
+              const toast = document.getElementById('last-round-toast');
+              toast.classList.remove('show');
+              toast.hidden = true;
+            }"""
+        )
+
+        check_result_cpu_badge(host.page)
+        result_screenshot = take_screenshot(
+            host.page, f"{tag}_result_{viewport[0]}x{viewport[1]}"
+        )
+        print(f"[{tag}] 終了画面スクリーンショット: {result_screenshot}")
+    finally:
         context.close()
 
 
@@ -615,6 +1024,8 @@ def main() -> None:
                 run_scenario(browser, players_count=4, viewport=(390, 844), tag="four")
                 run_scenario(browser, players_count=2, viewport=(360, 640), tag="two")
                 run_scenario(browser, players_count=7, viewport=(390, 844), tag="seven")
+                run_cpu_scenario(browser, cpu_count=1, viewport=(360, 640), tag="cpu-two")
+                run_cpu_scenario(browser, cpu_count=6, viewport=(360, 640), tag="cpu-seven")
             finally:
                 browser.close()
     finally:

@@ -456,19 +456,26 @@ body.room {
 }
 
 .player-name-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
+  display: block;
   min-width: 0;
 }
 
 .player-name {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.player-badges {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 16px;
+  white-space: nowrap;
 }
 
 .player-chips {
@@ -501,6 +508,11 @@ body.room {
 .player-tag.dealer {
   background: rgba(255, 255, 255, 0.12);
   color: var(--panel);
+}
+
+.player-tag.cpu {
+  background: rgba(147, 164, 189, 0.22);
+  color: var(--muted);
 }
 
 .player-tag.turn {
@@ -960,6 +972,13 @@ body.room {
   font-size: 0.8rem;
 }
 
+/* 文章中の CPU バッジは、行の流れに沿った小さなインライン表示にする。 */
+.toast .player-tag,
+.prompt .player-tag {
+  margin: 0;
+  vertical-align: middle;
+}
+
 /* ---------------- result ---------------- */
 
 .overlay {
@@ -1059,10 +1078,18 @@ body.room {
 }
 
 .result-name {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.result-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 700;
 }
 
 .result-chips {
