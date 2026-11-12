@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from gameplatform import realtime, rooms
+from games.neu import CPU_NAMES
 from web import create_app
 
 
@@ -312,9 +313,19 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         payload = response.get_json()
         names = [player["name"] for player in payload["room"]["players"]]
-        self.assertIn("CPU1", names)
-        self.assertIn("CPU2", names)
+        cpu_names = [name for name in names if name != "ホスト"]
+        self.assertEqual(len(cpu_names), 2)
+        self.assertEqual(len(set(cpu_names)), 2)
+        self.assertTrue(set(cpu_names) <= set(CPU_NAMES))
         self.assertEqual(len(payload["game"]["players"]), 3)
+        cpu_players = [player for player in payload["game"]["players"] if player["isCpu"]]
+        self.assertEqual(len(cpu_players), 2)
+        host_player = next(
+            player
+            for player in payload["game"]["players"]
+            if player["id"] == host["playerId"]
+        )
+        self.assertFalse(host_player["isCpu"])
         rooms.wait_for_cpus(room_id)
 
         rng = random.Random(123)

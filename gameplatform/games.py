@@ -41,6 +41,9 @@ class GameDefinition:
     # (game, cpu_ids, normalized_config) -> CPU の手番を1手ずつ進める駆動器（step(game) -> bool）。
     # None なら CPU 参加に対応しない。
     cpu_driver: Callable[[Any, list[str], dict[str, Any]], Any] | None = None
+    # CPU の表示名の候補。None / 空なら従来どおり CPU1, CPU2, ... を付ける。
+    # ゲーム側が指定した場合だけ、重複なしでランダムに選ぶ。
+    cpu_names: tuple[str, ...] | None = None
 
     def summary(self) -> dict[str, Any]:
         return {

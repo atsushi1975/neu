@@ -14,6 +14,40 @@ from gameplatform.games import GameDefinition, register
 from .adapter import NeuGame
 from .cpu import CpuDriver
 
+# CPU の表示名の候補（重複なしでランダムに選ぶ）。追加・変更はこの1か所で行う。
+CPU_NAMES = (
+    "はると",
+    "そうた",
+    "れん",
+    "たくみ",
+    "りく",
+    "かいと",
+    "ゆうと",
+    "しょうた",
+    "だいち",
+    "こうき",
+    "まさと",
+    "ひろし",
+    "たろう",
+    "じろう",
+    "さくら",
+    "ひなた",
+    "みさき",
+    "あおい",
+    "はるか",
+    "なつみ",
+    "めぐみ",
+    "ゆきこ",
+    "はなこ",
+    "まりこ",
+    "ともこ",
+    "みどり",
+    "あかり",
+    "りこ",
+    "ことね",
+    "ななみ",
+)
+
 
 def normalize_config(raw: Any) -> dict[str, Any]:
     """外部入力の設定を検証する。現在、ノイに設定項目はない。"""
@@ -49,6 +83,7 @@ GAME = GameDefinition(
     act=act,
     normalize_config=normalize_config,
     cpu_driver=CpuDriver,
+    cpu_names=CPU_NAMES,
 )
 
 register(GAME)

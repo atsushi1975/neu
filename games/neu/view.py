@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from gameplatform.rooms import is_cpu_id
 from neu.engine import (
     LOSING_LIMIT,
     Action,
@@ -98,6 +99,7 @@ def build_view(game: Any, player_id: str) -> dict[str, Any]:
                 "hand_count": len(player.hand),
                 "isCurrent": player.seat == state.current_player,
                 "isMe": player.seat == seat,
+                "isCpu": is_cpu_id(player_id_at_seat),
                 "isDealer": player.seat == state.dealer,
             }
         )

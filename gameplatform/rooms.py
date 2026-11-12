@@ -37,6 +37,13 @@ def _now() -> float:
 _rooms: dict[str, "Room"] = {}
 _cpu_threads: dict[str, threading.Thread] = {}
 _room_rng = random.Random()
+# CPU の表示名を選ぶ乱数。テストから seed を固定・差し替えできるように分けている。
+_cpu_name_rng = random.Random()
+
+
+def is_cpu_id(player_id: Any) -> bool:
+    """CPU プレイヤーの id かどうか。名前ではなく id の先頭で判定する。"""
+    return str(player_id).startswith("cpu")
 
 
 @dataclass(slots=True)
@@ -218,7 +225,7 @@ def _cpu_delay(room: Room) -> float:
         humans = [
             player
             for player in room.players
-            if not str(player.get("id", "")).startswith("cpu")
+            if not is_cpu_id(player.get("id", ""))
         ]
         try:
             if humans and all(not has_chips(player["id"]) for player in humans):
@@ -393,7 +400,7 @@ def _abort_game(room: Room) -> None:
     room.cpu_driver = None
     room.cpu_running = False
     # CPU プレイヤーを部屋から外す。
-    room.players = [p for p in room.players if not str(p.get("id", "")).startswith("cpu")]
+    room.players = [p for p in room.players if not is_cpu_id(p.get("id", ""))]
     _cancel_exit_timer(room)
     room.version += 1
 
@@ -418,11 +425,8 @@ def _evaluate_exit_request(room: Room) -> None:
         return
     others = [p for p in players if p["id"] != requester_id]
 
-    def is_cpu(pid: str) -> bool:
-        return str(pid).startswith("cpu")
-
     def approved(pid: str) -> bool:
-        if is_cpu(pid):
+        if is_cpu_id(pid):
             return True
         return req["votes"].get(pid) is True
 
@@ -435,7 +439,7 @@ def _evaluate_exit_request(room: Room) -> None:
         _abort_game(room)
         return
     # 拒否 or 期限切れ -> 却下。
-    if any((not is_cpu(p["id"])) and req["votes"].get(p["id"]) is False for p in others) or now >= req["expires"]:
+    if any((not is_cpu_id(p["id"])) and req["votes"].get(p["id"]) is False for p in others) or now >= req["expires"]:
         room.exit_request = None
         cooldown_until = min(now, req["expires"]) + EXIT_COOLDOWN_SECONDS
         room.exit_cooldown[requester_id] = cooldown_until
@@ -546,16 +550,41 @@ def _seat_order(players: list[dict[str, str]]) -> list[dict[str, str]]:
     return seats
 
 
+def _name_key(name: str) -> str:
+    """名前の重複判定用のキー（前後の空白を除き、大文字小文字を無視する）。"""
+    return (name or "").strip().casefold()
+
+
 def _new_cpus(room: Room, count: int) -> list[dict[str, str]]:
-    """CPU 用のプレイヤー（トークンは持たない）。名前は既存の名前と重ならないように付ける。"""
-    taken = {player["name"].casefold() for player in room.players}
+    """CPU 用のプレイヤー（トークンは持たない）。名前は既存の名前と重ならないように付ける。
+
+    ゲームの ``GameDefinition.cpu_names`` に候補があれば、その中から重複なしで
+    ランダムに選ぶ。候補が無いゲームや、候補だけでは足りない場合は従来どおり
+    ``CPU1``, ``CPU2``, ... を付ける（例外にはしない）。
+    """
+    taken = {_name_key(player["name"]) for player in room.players}
+    pool: list[str] = []
+    pool_keys: set[str] = set()
+    for candidate in room.definition.cpu_names or ():
+        cleaned = (candidate or "").strip()
+        key = cleaned.casefold()
+        if not key or key in taken or key in pool_keys:
+            continue
+        pool.append(cleaned)
+        pool_keys.add(key)
+
     cpus = []
     number = 1
     for _ in range(count):
-        while f"cpu{number}" in taken:
+        if pool:
+            name = pool.pop(_cpu_name_rng.randrange(len(pool)))
+        else:
+            while f"cpu{number}" in taken:
+                number += 1
+            name = f"CPU{number}"
             number += 1
-        taken.add(f"cpu{number}")
-        cpus.append({"id": f"cpu-{uuid.uuid4().hex[:8]}", "name": f"CPU{number}"})
+        taken.add(_name_key(name))
+        cpus.append({"id": f"cpu-{uuid.uuid4().hex[:8]}", "name": name})
     return cpus
 
 
