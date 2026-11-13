@@ -705,7 +705,10 @@ python3 app.py --port 5001
 - バージョンはプロジェクト直下の `VERSION` を正とする。GET `/health` の `version` はその値。
 - 最初のリリース = `RELEASE1.0`。以降の小さな修正は `RELEASE1.0-01`, `RELEASE1.0-02`, …（2桁の連番）。
 - 大きな変更（遊び方や互換性が変わるもの）は `RELEASE1.1` のようにサブバージョンを上げる。
-- 修正のたびに `VERSION` を更新する。
+- ビルド時に `python3 tools/build_version.py --write` を実行し、git タグ `RELEASE1.0` からの
+  コミット数で自動採番する（0件 -> `RELEASE1.0`、n件 -> `RELEASE1.0-nn`）。
+- git 履歴/タグが無いビルド環境では既存の `VERSION` をそのまま使い、`VERSION` も無ければ `dev`。
+- 番号は手作業で書き換えない（採番の基準タグは `RELEASE1.0`）。
 
 ## バージョン履歴
 
