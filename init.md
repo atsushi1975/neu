@@ -711,3 +711,4 @@ python3 app.py --port 5001
 
 - `RELEASE1.0`: 最初のリリース。フェーズ2（Web UI / API）、退出システム（承認制）、CPU 対戦、
   順位表示、連戦システム（通常戦 / 3・5・10 連戦）を含む。
+- `RELEASE1.0-01`: アプリアイコン（`static/img/icon/`）と favicon の指定を追加。

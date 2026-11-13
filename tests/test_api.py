@@ -264,7 +264,7 @@ class ApiTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["title"], "ノイ")
-        self.assertEqual(payload["version"], "RELEASE1.0")
+        self.assertEqual(payload["version"], "RELEASE1.0-01")
         self.assertIn(payload["status"], {"idle", "waiting", "playing"})
         self.assertIn("playing_rooms", payload)
         self.assertIn("neu", payload["games"])
