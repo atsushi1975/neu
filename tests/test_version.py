@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.build_version import determine_version, format_version
+from tools.build_version import (
+    GitHistoryUnavailable,
+    determine_version,
+    format_version,
+)
 
 
 class BuildVersionTest(unittest.TestCase):
@@ -32,6 +36,19 @@ class BuildVersionTest(unittest.TestCase):
             with patch(
                 "tools.build_version.count_commits_since_tag",
                 side_effect=subprocess.CalledProcessError(1, "git"),
+            ):
+                self.assertEqual(
+                    determine_version(cwd=Path(tmp), version_file=version_file),
+                    "RELEASE1.0-07",
+                )
+
+    def test_falls_back_when_repository_is_shallow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            version_file = Path(tmp) / "VERSION"
+            version_file.write_text("RELEASE1.0-07\n", encoding="utf-8")
+            with patch(
+                "tools.build_version.count_commits_since_tag",
+                side_effect=GitHistoryUnavailable("shallow"),
             ):
                 self.assertEqual(
                     determine_version(cwd=Path(tmp), version_file=version_file),

@@ -28,6 +28,10 @@ BASE_VERSION = "RELEASE1.0"
 BASE_TAG = "RELEASE1.0"
 
 
+class GitHistoryUnavailable(RuntimeError):
+    """ビルド環境の git 履歴が浅く、コミット数を数えられない。"""
+
+
 def format_version(commit_count: int) -> str:
     """コミット数から version 文字列を組み立てる。"""
     if commit_count < 0:
@@ -39,6 +43,16 @@ def format_version(commit_count: int) -> str:
 
 def count_commits_since_tag(tag: str = BASE_TAG, cwd: Path = ROOT) -> int:
     """タグから HEAD までのコミット数を返す。git が使えなければ例外。"""
+    shallow = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if shallow.stdout.strip() == "true":
+        raise GitHistoryUnavailable("shallow clone has no full history")
+
     result = subprocess.run(
         ["git", "rev-list", "--count", f"{tag}..HEAD"],
         cwd=cwd,
@@ -65,7 +79,7 @@ def determine_version(
     """git から version を決める。取得失敗時は既存 VERSION、無ければ "dev"。"""
     try:
         return format_version(count_commits_since_tag(tag, cwd))
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError, GitHistoryUnavailable):
         return read_version(version_file) or "dev"
 
 
