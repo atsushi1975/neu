@@ -117,14 +117,13 @@ class RoundContinuationInvariantTest(unittest.TestCase):
             before_deck = list(state.deck)
             before_table = list(state.table)
             before_hands = [list(p.hand) for p in state.players]
-            before_direction = state.direction
             result = original(state)
 
             context = f"players={players} seed={seed} round={result.round_number}"
             # 2ラウンド目以降の開始時は、合計は必ず 0。
             self.assertEqual(result.total, 0, context)
-            # 向きはリセットせず引き継ぐ。
-            self.assertEqual(result.direction, before_direction, context)
+            # 新ラウンドの向きは、前ラウンドが逆回りでも時計回りにリセット。
+            self.assertEqual(result.direction, 1, context)
             eliminated = any(
                 entry["eliminated"]
                 for entry in state.round_results[before_results:]

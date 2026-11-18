@@ -84,7 +84,7 @@ class RoundEndTest(unittest.TestCase):
         self.assertEqual(after.current_player, 2)
         self.assertEqual(after.phase, "playing")
 
-    def test_dealer_moves_counterclockwise_when_direction_reversed(self):
+    def test_dealer_moves_clockwise_when_direction_reversed(self):
         state = make_state(
             [cards("n5", "pass", "pass"), cards("n1", "n1", "n1"), cards("n50", "n50", "n10")],
             total=100,
@@ -95,21 +95,25 @@ class RoundEndTest(unittest.TestCase):
         )
         after = apply(state, Action(0, 1))  # 席0 が PASS → 反時計回りで次は席2 → 出せない → 負け
         self.assertFalse(after.players[2].alive)
-        self.assertEqual(after.dealer, 1)  # 反時計回り方向の隣が新しいディーラー
-        self.assertEqual(after.direction, -1)  # 向きはリセットしない（引き継ぐ）
-        self.assertEqual(after.current_player, 1)
+        # 脱落者の親は、その時点の進行方向ではなく時計回り方向の次の生存者（席2 → 席0）。
+        self.assertEqual(after.dealer, 0)
+        self.assertEqual(after.direction, 1)  # 新ラウンドは時計回りにリセット
+        self.assertEqual(after.current_player, 0)
 
-    def test_direction_is_carried_over_on_new_round(self):
+    def test_direction_resets_clockwise_on_new_round(self):
         state = make_state(
-            [cards("n5", "pass", "pass"), cards("n50", "n50", "n10"), cards("n1", "n1", "n1")],
+            [cards("n5", "pass", "pass"), cards("n1", "n1", "n1"), cards("n50", "n50", "n10")],
             total=100,
             current=0,
             direction=-1,
             chips=[3, 3, 3],
             dealer=1,
         )
-        after = apply(state, Action(0, 1))  # 席0 が PASS → 席1 の手番 → 負け
-        self.assertEqual(after.direction, -1)  # 向きはリセットしない
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 反時計回りで席2 の手番 → 出せず負け
+        self.assertEqual(after.round_results[-1]["loser"], 2)
+        self.assertEqual(after.direction, 1)  # 新ラウンドは時計回りにリセット
+        self.assertEqual(after.dealer, 2)
+        self.assertEqual(after.current_player, 2)
 
     def test_game_over_when_one_survivor(self):
         hands = [cards("n50", "n50", "n10"), cards("pass", "pass", "pass")]
@@ -173,11 +177,12 @@ class RoundEndTest(unittest.TestCase):
         # (f) 最初の手番は負けた人
         self.assertEqual(after.current_player, 2)
         self.assertEqual(after.round_number, 2)
-        # (g) 向きは引き継ぐ
-        self.assertEqual(after.direction, -1)
+        # (g) 新ラウンドの向きは時計回りにリセット
+        self.assertEqual(after.direction, 1)
 
-    def test_start_round_keeps_deck_table_hands_and_direction(self):
-        # ラウンド継続（start_round）は合計を 0 に戻すだけで、カード・向きには触らない。
+    def test_start_round_keeps_deck_table_hands_and_resets_direction(self):
+        # ラウンド継続（start_round）は合計を 0 に戻し、向きを時計回りに戻すだけで、
+        # カードには触らない。
         state = make_state(
             [cards("n1", "n2", "n3")] * 3,
             total=77,
@@ -198,9 +203,79 @@ class RoundEndTest(unittest.TestCase):
             [[c.id for c in p.hand] for p in state.players],
             [["n1", "n2", "n3"]] * 3,
         )
-        self.assertEqual(state.direction, -1)
+        self.assertEqual(state.direction, 1)
         self.assertEqual(state.round_number, 4)
         self.assertEqual(state.current_player, 2)  # ディーラー（負けた人）から
+
+    def test_turn_reversed_loss_starts_next_round_clockwise(self):
+        # TURN で逆回りになったラウンドで負けても、新ラウンドは時計回りで始まる。
+        state = make_state(
+            [
+                cards("turn", "pass", "pass"),
+                cards("n1", "n1", "n1"),
+                cards("n1", "n1", "n1"),
+                cards("n50", "n50", "n10"),
+            ],
+            total=100,
+            current=0,
+            direction=1,
+            chips=[3, 3, 3, 3],
+        )
+        after = apply(state, Action(0, 0))  # 席0 が TURN → 逆回りで席3 の手番 → 出せず負け
+        self.assertEqual(after.round_results[-1]["loser"], 3)
+        self.assertFalse(after.round_results[-1]["eliminated"])
+        self.assertEqual(after.dealer, 3)
+        self.assertEqual(after.current_player, 3)
+        self.assertEqual(after.direction, 1)
+
+    def test_eliminated_dealer_is_clockwise_neighbor_even_when_direction_reversed(self):
+        # 逆回り中でも、脱落した人の親は時計回り方向の次の生存者。
+        # 席2 はすでに脱落しているので、席1 の次は席2 を飛ばして席3。
+        state = make_state(
+            [
+                cards("shot", "n1", "n2"),
+                cards("n50", "n50", "n10"),
+                cards("n1", "n1", "n1"),
+                cards("n1", "n1", "n1"),
+            ],
+            total=100,
+            current=0,
+            direction=-1,
+            chips=[3, 1, 0, 3],
+            dealer=1,
+        )
+        after = apply(state, Action(0, 0, target=1))  # 席0 が SHOT で席1 を指名 → 席1 が負け → 脱落
+        self.assertFalse(after.players[1].alive)
+        self.assertEqual(after.dealer, 3)  # 席2（脱落）を飛ばした時計回り方向の次の生存者
+        self.assertEqual(after.current_player, 3)
+        self.assertEqual(after.direction, 1)
+
+    def test_new_round_does_not_reshuffle_or_redeal_cards(self):
+        # ラウンド負けのあとも、山札・場札・手札の配り直しはしない。
+        state = make_state(
+            [cards("n5", "pass", "pass"), cards("n1", "n2", "n3"), cards("n50", "n50", "n10")],
+            total=100,
+            current=0,
+            direction=-1,
+            chips=[3, 3, 3],
+            dealer=2,
+            deck=[card("n7", 1), card("n8", 1)],
+            table=[card("n9", 1), card("n2", 2)],
+        )
+        after = apply(state, Action(0, 1))  # 席0 が PASS → 反時計回りで席2 の手番 → 出せず負け
+
+        self.assertEqual(after.round_number, 2)
+        # 席0 の補充で山札から1枚引かれ、出した PASS が場札に積まれるだけ。
+        self.assertEqual([c.id for c in after.deck], ["n7"])
+        self.assertEqual([c.id for c in after.table], ["n9", "n2", "pass"])
+        self.assertEqual(
+            [[c.id for c in p.hand] for p in after.players],
+            [
+                ["n5", "pass", "n8"],
+                ["n1", "n2", "n3"],
+                ["n50", "n50", "n10"],
+            ],
+        )
 
     @staticmethod
     def _assert_58(state):
